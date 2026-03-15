@@ -1,0 +1,183 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # Web 部署包（纯 Node.js 服务，不含 Electron）
+  web-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm run install-all
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Create web deployment package
+        run: |
+          mkdir -p release-web
+          cp -r server release-web/
+          cp -r client/build release-web/client-build
+          cp package.json release-web/
+          cp .env.example release-web/.env 2>/dev/null || echo -e "PORT=3000\nJWT_SECRET=change-me-in-production\nNODE_ENV=production" > release-web/.env
+          mkdir -p release-web/data
+          # 只复制生产依赖
+          cd release-web && npm install --omit=dev && cd ..
+          # 打包
+          tar -czf hospital-scheduler-web-${{ github.ref_name }}.tar.gz -C release-web .
+          zip -r hospital-scheduler-web-${{ github.ref_name }}.zip release-web/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-package
+          path: |
+            hospital-scheduler-web-*.tar.gz
+            hospital-scheduler-web-*.zip
+
+  # macOS 桌面应用
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm run install-all
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Electron app (macOS)
+        run: npx electron-builder --config electron-builder-server.json --mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-mac
+          path: |
+            dist-server/*.dmg
+            dist-server/*.zip
+
+  # Windows 桌面应用
+  build-win:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm run install-all
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Electron app (Windows)
+        run: npx electron-builder --config electron-builder-server.json --win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-win
+          path: |
+            dist-server/*.exe
+
+  # Linux 桌面应用
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm run install-all
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Electron app (Linux)
+        run: npx electron-builder --config electron-builder-server.json --linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux
+          path: |
+            dist-server/*.AppImage
+            dist-server/*.deb
+
+  # 汇总所有产物，创建 GitHub Release
+  release:
+    needs: [web-package, build-mac, build-win, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f | head -50
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }} 医院手术排班系统
+          generate_release_notes: true
+          body: |
+            ## 医院手术排班系统 ${{ github.ref_name }}
+
+            ### 下载说明
+
+            | 文件 | 适用平台 | 说明 |
+            |------|----------|------|
+            | `*.dmg` | macOS | Mac 桌面应用（双击安装） |
+            | `*.exe (Setup)` | Windows | Windows 安装版 |
+            | `*.exe (Portable)` | Windows | Windows 免安装版（直接运行） |
+            | `*.AppImage` | Linux | Linux 免安装版（赋权后直接运行） |
+            | `*.deb` | Ubuntu/Debian | Linux deb 安装包 |
+            | `*-web-*.tar.gz` | 服务器 | Web 部署包（Node.js 服务端） |
+            | `*-web-*.zip` | 服务器 | Web 部署包（zip 格式） |
+
+            ### 桌面应用使用方式
+            下载对应平台的安装包，安装后启动即可。应用内置了完整的服务端，开箱即用。
+
+            ### Web 部署包使用方式
+            ```bash
+            # 解压
+            tar -xzf hospital-scheduler-web-*.tar.gz
+            # 启动
+            node server/index.js
+            # 访问 http://localhost:3000
+            ```
+
+            默认管理员账户：`admin` / `admin123`
+          files: |
+            artifacts/dist-mac/*
+            artifacts/dist-win/*
+            artifacts/dist-linux/*
+            artifacts/web-package/*
