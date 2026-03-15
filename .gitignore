@@ -1,0 +1,12 @@
+node_modules/
+client/node_modules/
+client/build/
+dist/
+dist-server/
+*.db
+*.sqlite
+.env
+.DS_Store
+*.log
+.cursor/
+package.json.bak

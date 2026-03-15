@@ -1,0 +1,261 @@
+.database-management {
+  background: white;
+  border-radius: 16px;
+  width: 90%;
+  max-width: 700px;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+.database-management .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid #eee;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.database-management .modal-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.database-management .close-button {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  font-size: 24px;
+  cursor: pointer;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.3s;
+}
+
+.database-management .close-button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.database-management .modal-body {
+  padding: 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.database-management .message {
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  font-weight: 500;
+}
+
+.database-management .message.success {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.database-management .message.error {
+  background: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+
+.database-management .section {
+  margin-bottom: 28px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #eee;
+}
+
+.database-management .section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.database-management .section h3 {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+  color: #333;
+}
+
+.database-management .section-desc {
+  color: #666;
+  font-size: 14px;
+  margin: 0 0 16px 0;
+}
+
+.database-management .stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 600px) {
+  .database-management .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.database-management .stat-card {
+  background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%);
+  padding: 16px;
+  border-radius: 12px;
+  text-align: center;
+}
+
+.database-management .stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #667eea;
+  margin-bottom: 4px;
+}
+
+.database-management .stat-label {
+  font-size: 12px;
+  color: #666;
+}
+
+.database-management .button-group {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.database-management .btn {
+  padding: 12px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.database-management .btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.database-management .btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.database-management .btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+}
+
+.database-management .btn-secondary {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.database-management .btn-secondary:hover:not(:disabled) {
+  background: #e0e0e0;
+}
+
+.database-management .btn-danger {
+  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a5a 100%);
+  color: white;
+}
+
+.database-management .btn-danger:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(238, 90, 90, 0.4);
+}
+
+.database-management .hint {
+  font-size: 12px;
+  color: #888;
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
+.database-management .danger-section {
+  background: #fff5f5;
+  margin: 0 -24px -24px -24px;
+  padding: 24px;
+  border-radius: 0 0 16px 16px;
+  border-top: 2px solid #ffcccc;
+}
+
+.database-management .danger-section h3 {
+  color: #c0392b;
+}
+
+.database-management .operating-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.database-management .spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.database-management .loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+@media (max-width: 768px) {
+  .database-management {
+    width: 100%;
+    max-width: 100%;
+    max-height: 95vh;
+    border-radius: 16px 16px 0 0;
+  }
+
+  .database-management .modal-body {
+    padding: 16px;
+  }
+
+  .database-management .button-group {
+    flex-direction: column;
+  }
+
+  .database-management .btn {
+    width: 100%;
+    justify-content: center;
+    padding: 14px;
+  }
+
+  .database-management .danger-section {
+    margin: 0 -16px -16px -16px;
+    padding: 16px;
+  }
+}

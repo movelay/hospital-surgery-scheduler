@@ -1,0 +1,149 @@
+.time-slot-visualizer {
+  margin: 20px 0;
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #dee2e6;
+}
+
+.visualizer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.visualizer-header h3 {
+  margin: 0;
+  color: #333;
+  font-size: 16px;
+}
+
+.loading-text {
+  color: #007bff;
+  font-size: 14px;
+}
+
+.visualizer-placeholder {
+  padding: 40px;
+  text-align: center;
+  color: #999;
+  background: #fff;
+  border-radius: 4px;
+}
+
+.visualizer-container {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 600px;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 10px;
+}
+
+.time-slot-canvas {
+  display: block;
+  cursor: crosshair;
+  background: #fff;
+}
+
+.time-slot-canvas:hover {
+  cursor: crosshair;
+}
+
+.surgery-tooltip {
+  position: absolute;
+  background: #333;
+  color: #fff;
+  padding: 10px 15px;
+  border-radius: 6px;
+  font-size: 12px;
+  z-index: 1000;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  max-width: 250px;
+  margin-top: 10px;
+}
+
+.surgery-tooltip .tooltip-title {
+  font-weight: bold;
+  margin-bottom: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.surgery-tooltip div {
+  margin: 4px 0;
+  line-height: 1.4;
+}
+
+.selected-time-info {
+  margin-top: 15px;
+  padding: 12px;
+  background: #e7f3ff;
+  border-left: 4px solid #007bff;
+  border-radius: 4px;
+}
+
+.selected-time-info strong {
+  color: #007bff;
+}
+
+.conflict-warning {
+  margin-top: 8px;
+  padding: 8px;
+  background: #fff3cd;
+  border-left: 4px solid #ffc107;
+  border-radius: 4px;
+  color: #856404;
+  font-weight: 500;
+}
+
+.visualizer-legend {
+  margin-top: 15px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: center;
+  padding: 12px;
+  background: #fff;
+  border-radius: 4px;
+  border: 1px solid #dee2e6;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend-color {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  border: 1px solid #ccc;
+}
+
+.legend-hint {
+  margin-left: auto;
+  color: #666;
+  font-size: 12px;
+  font-style: italic;
+}
+
+@media (max-width: 768px) {
+  .visualizer-container {
+    max-height: 400px;
+  }
+  
+  .visualizer-legend {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .legend-hint {
+    margin-left: 0;
+  }
+}

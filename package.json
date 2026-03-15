@@ -1,0 +1,45 @@
+{
+  "name": "hospital-surgery-scheduler",
+  "version": "1.0.0",
+  "description": "医院科室手术排班管理系统",
+  "main": "server-main.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "nodemon server/index.js",
+    "client": "cd client && PORT=3001 npm start",
+    "build": "cd client && npm run build",
+    "electron": "electron .",
+    "electron:dev": "concurrently \"npm run server\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:build": "npm run build && electron-builder --mac",
+    "electron:build:win": "npm run build && electron-builder --win",
+    "electron:build:server": "npm run build && electron-builder --config electron-builder-server.json --mac --arm64",
+    "electron:build:client": "electron-builder --config electron-builder.json --mac --arm64",
+    "install-all": "npm install && cd client && npm install",
+    "rebuild-sqlite3": "npm rebuild sqlite3"
+  },
+  "keywords": [
+    "hospital",
+    "surgery",
+    "scheduler"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "sqlite3": "^5.1.6"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.2",
+    "concurrently": "^8.2.2",
+    "electron": "^27.3.11",
+    "electron-builder": "^24.6.4",
+    "nodemon": "^3.0.1",
+    "wait-on": "^7.2.0"
+  }
+}

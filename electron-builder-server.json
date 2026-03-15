@@ -1,0 +1,49 @@
+{
+  "appId": "com.hospital.surgery-scheduler-server",
+  "productName": "医院手术排班系统-服务端",
+  "directories": {
+    "output": "dist-server",
+    "buildResources": "build"
+  },
+  "files": [
+    "server/**/*",
+    "client/build/**/*",
+    "server-main.js",
+    "package.json",
+    "node_modules/**/*",
+    "!**/*.map",
+    "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,LICENSE,license,License}",
+    "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+    "!**/node_modules/*.d.ts",
+    "!**/node_modules/.bin"
+  ],
+  "extraResources": [
+    {
+      "from": "data",
+      "to": "data",
+      "filter": ["**/*"]
+    }
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "node_modules/sqlite3/**/*",
+    "client/build/**/*"
+  ],
+  "mac": {
+    "category": "public.app-category.medical",
+    "target": [
+      {
+        "target": "dmg",
+        "arch": ["x64", "arm64"]
+      }
+    ],
+    "icon": "build/icon.png",
+    "hardenedRuntime": false,
+    "gatekeeperAssess": false
+  },
+  "win": {
+    "target": ["portable"],
+    "icon": "build/icon.ico"
+  },
+  "publish": null
+}
