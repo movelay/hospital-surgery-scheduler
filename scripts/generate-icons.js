@@ -157,6 +157,17 @@ for (const size of sizes) {
 }
 
 // Generate a simple ICO file for Windows (256x256 PNG embedded in ICO)
+// Linux icons (build/icons/) - electron-builder expects NxN.png naming
+const linuxDir = path.join(outputDirs.electron, 'icons');
+if (!fs.existsSync(linuxDir)) fs.mkdirSync(linuxDir, { recursive: true });
+const linuxSizes = [16, 32, 48, 64, 128, 256, 512];
+console.log('Generating Linux icons...');
+for (const s of linuxSizes) {
+  const png = createPNG(s, s, drawIcon(s));
+  fs.writeFileSync(path.join(linuxDir, `${s}x${s}.png`), png);
+  console.log(`  -> build/icons/${s}x${s}.png`);
+}
+
 console.log('Generating ICO for Windows...');
 const ico256 = createPNG(256, 256, drawIcon(256));
 

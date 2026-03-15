@@ -11,9 +11,10 @@
     "build": "cd client && npm run build",
     "electron": "electron .",
     "electron:dev": "concurrently \"npm run server\" \"wait-on http://localhost:3000 && electron .\"",
-    "electron:build": "npm run build && electron-builder --mac",
-    "electron:build:win": "npm run build && electron-builder --win",
-    "electron:build:server": "npm run build && electron-builder --config electron-builder-server.json --mac --arm64",
+    "electron:build": "npm run build && electron-builder --config electron-builder-server.json --mac",
+    "electron:build:win": "npm run build && electron-builder --config electron-builder-server.json --win",
+    "electron:build:linux": "npm run build && electron-builder --config electron-builder-server.json --linux",
+    "electron:build:all": "npm run build && electron-builder --config electron-builder-server.json --mac --win --linux",
     "electron:build:client": "electron-builder --config electron-builder.json --mac --arm64",
     "install-all": "npm install && cd client && npm install",
     "rebuild-sqlite3": "npm rebuild sqlite3"

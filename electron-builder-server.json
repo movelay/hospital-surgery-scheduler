@@ -41,9 +41,36 @@
     "hardenedRuntime": false,
     "gatekeeperAssess": false
   },
+  "dmg": {
+    "contents": [
+      { "x": 130, "y": 220 },
+      { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+    ],
+    "window": { "width": 540, "height": 400 }
+  },
   "win": {
-    "target": ["portable"],
+    "target": [
+      { "target": "nsis", "arch": ["x64"] },
+      { "target": "portable", "arch": ["x64"] }
+    ],
     "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "医院手术排班系统"
+  },
+  "linux": {
+    "target": [
+      { "target": "AppImage", "arch": ["x64"] },
+      { "target": "deb", "arch": ["x64"] }
+    ],
+    "icon": "build/icons",
+    "category": "Office",
+    "synopsis": "医院科室手术排班管理系统",
+    "description": "支持手术排班、用户管理、数据备份恢复的医院内部管理系统"
   },
   "publish": null
 }
