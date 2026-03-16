@@ -122,22 +122,6 @@ async function startServer() {
       addLog('📂 静态文件路径: ' + process.env.STATIC_PATH);
       addLog('🚀 正在启动服务器...');
       
-      // 设置 sqlite3 的路径，使用 unpacked 中的原生模块
-      if (!isDev) {
-        const sqlite3Path = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'sqlite3');
-        addLog('📂 SQLite3 路径: ' + sqlite3Path);
-        
-        // 修改 require 路径
-        const Module = require('module');
-        const originalResolveFilename = Module._resolveFilename;
-        Module._resolveFilename = function(request, parent, isMain, options) {
-          if (request === 'sqlite3') {
-            return path.join(sqlite3Path, 'lib', 'sqlite3.js');
-          }
-          return originalResolveFilename(request, parent, isMain, options);
-        };
-      }
-      
       // 加载服务器
       const serverPath = isDev 
         ? path.join(__dirname, 'server', 'index.js')

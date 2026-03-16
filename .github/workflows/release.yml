@@ -29,7 +29,7 @@ jobs:
         run: |
           mkdir -p release-web
           cp -r server release-web/
-          cp -r client/build release-web/client-build
+          mkdir -p release-web/client && cp -r client/build release-web/client/
           cp package.json release-web/
           cp .env.example release-web/.env 2>/dev/null || echo -e "PORT=3000\nJWT_SECRET=change-me-in-production\nNODE_ENV=production" > release-web/.env
           mkdir -p release-web/data

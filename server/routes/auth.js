@@ -13,38 +13,37 @@ router.post('/login', (req, res) => {
     return res.status(400).json({ error: '用户名和密码不能为空' });
   }
 
-  const db = getDatabase();
-  db.get('SELECT * FROM users WHERE username = ?', [username], (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: '数据库查询错误' });
-    }
+  try {
+    const db = getDatabase();
+    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
 
     if (!user) {
       return res.status(401).json({ error: '用户名或密码错误' });
     }
 
-    bcrypt.compare(password, user.password, (err, isMatch) => {
-      if (err || !isMatch) {
-        return res.status(401).json({ error: '用户名或密码错误' });
+    const isMatch = bcrypt.compareSync(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: '用户名或密码错误' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, username: user.username, role: user.role, name: user.name },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        role: user.role
       }
-
-      const token = jwt.sign(
-        { id: user.id, username: user.username, role: user.role, name: user.name },
-        process.env.JWT_SECRET || 'your-secret-key',
-        { expiresIn: '24h' }
-      );
-
-      res.json({
-        token,
-        user: {
-          id: user.id,
-          username: user.username,
-          name: user.name,
-          role: user.role
-        }
-      });
     });
-  });
+  } catch (err) {
+    return res.status(500).json({ error: '数据库查询错误' });
+  }
 });
 
 // 获取当前用户信息

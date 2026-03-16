@@ -1,4 +1,4 @@
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 const path = require('path');
 const fs = require('fs');
@@ -13,14 +13,10 @@ if (!fs.existsSync(dbDir)) {
 }
 
 // 创建持久的数据库连接
-const db = new sqlite3.Database(DB_PATH, (err) => {
-  if (err) {
-    console.error('数据库连接错误:', err.message);
-  }
-});
+const db = new Database(DB_PATH);
 
 // 启用外键约束
-db.run('PRAGMA foreign_keys = ON');
+db.pragma('foreign_keys = ON');
 
 // 获取数据库连接
 function getDatabase() {
@@ -29,36 +25,26 @@ function getDatabase() {
 
 // 关闭数据库连接
 function closeDatabase() {
-  return new Promise((resolve) => {
-    db.close((err) => {
-      if (err) {
-        console.error('关闭数据库连接错误:', err.message);
-      }
-      resolve();
-    });
-  });
+  db.close();
+  return Promise.resolve();
 }
 
 // 初始化数据库表
 function initDatabase() {
   return new Promise((resolve, reject) => {
-    db.serialize(() => {
+    try {
       // 创建用户表
-      db.run(`CREATE TABLE IF NOT EXISTS users (
+      db.exec(`CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
         name TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'doctor',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`, (err) => {
-        if (err) {
-          console.error('创建用户表失败:', err);
-        }
-      });
+      )`);
 
       // 创建手术表
-      db.run(`CREATE TABLE IF NOT EXISTS surgeries (
+      db.exec(`CREATE TABLE IF NOT EXISTS surgeries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         doctor_id INTEGER NOT NULL,
         doctor_name TEXT NOT NULL,
@@ -73,42 +59,24 @@ function initDatabase() {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (doctor_id) REFERENCES users(id)
-      )`, (err) => {
-        if (err) {
-          console.error('创建手术表失败:', err);
-        }
-      });
+      )`);
 
       // 检查并创建默认管理员账户
-      db.get('SELECT * FROM users WHERE username = ?', ['admin'], (err, row) => {
-        if (err) {
-          console.error('查询管理员账户失败:', err);
-          reject(err);
-          return;
-        }
-        
-        if (!row) {
-          const hashedPassword = bcrypt.hashSync('admin123', 10);
-          db.run(
-            'INSERT INTO users (username, password, name, role) VALUES (?, ?, ?, ?)',
-            ['admin', hashedPassword, '系统管理员', 'admin'],
-            (err) => {
-              if (err) {
-                console.error('创建默认管理员账户失败:', err);
-                reject(err);
-              } else {
-                console.log('默认管理员账户已创建: admin / admin123');
-                console.log('数据库路径:', DB_PATH);
-                resolve();
-              }
-            }
-          );
-        } else {
-          console.log('数据库初始化完成，路径:', DB_PATH);
-          resolve();
-        }
-      });
-    });
+      const row = db.prepare('SELECT * FROM users WHERE username = ?').get('admin');
+      if (!row) {
+        const hashedPassword = bcrypt.hashSync('admin123', 10);
+        db.prepare(
+          'INSERT INTO users (username, password, name, role) VALUES (?, ?, ?, ?)'
+        ).run('admin', hashedPassword, '系统管理员', 'admin');
+        console.log('默认管理员账户已创建: admin / admin123');
+      } else {
+        console.log('数据库初始化完成');
+      }
+      console.log('数据库路径:', DB_PATH);
+      resolve();
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
