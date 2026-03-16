@@ -52,6 +52,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -80,6 +84,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -101,37 +109,9 @@ jobs:
           path: |
             dist-server/*.exe
 
-  # Linux 桌面应用
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install dependencies
-        run: npm run install-all
-
-      - name: Build frontend
-        run: npm run build
-
-      - name: Build Electron app (Linux)
-        run: npx electron-builder --config electron-builder-server.json --linux
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist-linux
-          path: |
-            dist-server/*.AppImage
-            dist-server/*.deb
-
   # 汇总所有产物，创建 GitHub Release
   release:
-    needs: [web-package, build-mac, build-win, build-linux]
+    needs: [web-package, build-mac, build-win]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -158,13 +138,14 @@ jobs:
             | `*.dmg` | macOS | Mac 桌面应用（双击安装） |
             | `*.exe (Setup)` | Windows | Windows 安装版 |
             | `*.exe (Portable)` | Windows | Windows 免安装版（直接运行） |
-            | `*.AppImage` | Linux | Linux 免安装版（赋权后直接运行） |
-            | `*.deb` | Ubuntu/Debian | Linux deb 安装包 |
             | `*-web-*.tar.gz` | 服务器 | Web 部署包（Node.js 服务端） |
             | `*-web-*.zip` | 服务器 | Web 部署包（zip 格式） |
 
             ### 桌面应用使用方式
             下载对应平台的安装包，安装后启动即可。应用内置了完整的服务端，开箱即用。
+
+            ### 手机端使用（Android / iOS）
+            Electron 不支持打包为原生 App。请使用 **PWA** 方式：在手机浏览器打开 Web 地址后，选择「添加到主屏幕」即可像 App 一样使用。
 
             ### Web 部署包使用方式
             ```bash
@@ -179,5 +160,4 @@ jobs:
           files: |
             artifacts/dist-mac/*
             artifacts/dist-win/*
-            artifacts/dist-linux/*
             artifacts/web-package/*

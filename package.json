@@ -4,6 +4,7 @@
   "description": "医院科室手术排班管理系统",
   "main": "server-main.js",
   "scripts": {
+    "postinstall": "node -e \"try{require.resolve('electron-builder');require('child_process').execSync('electron-builder install-app-deps',{stdio:'inherit'})}catch(e){}\"",
     "start": "node server/index.js",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "nodemon server/index.js",
@@ -13,8 +14,7 @@
     "electron:dev": "concurrently \"npm run server\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:build": "npm run build && electron-builder --config electron-builder-server.json --mac",
     "electron:build:win": "npm run build && electron-builder --config electron-builder-server.json --win",
-    "electron:build:linux": "npm run build && electron-builder --config electron-builder-server.json --linux",
-    "electron:build:all": "npm run build && electron-builder --config electron-builder-server.json --mac --win --linux",
+    "electron:build:all": "npm run build && electron-builder --config electron-builder-server.json --mac --win",
     "electron:build:client": "electron-builder --config electron-builder.json --mac --arm64",
     "install-all": "npm install && cd client && npm install",
     "rebuild-sqlite3": "npm rebuild sqlite3"
