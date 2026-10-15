@@ -1,241 +1,356 @@
 const express = require('express');
 const { getDatabase } = require('../database/init');
+const { statement } = require('../database/statements');
+const { findConflict } = require('../database/conflicts');
 const { authenticateToken } = require('../middleware/auth');
+const {
+  STATUSES,
+  httpError,
+  sendRouteError,
+  normalizeDate,
+  normalizeTime
+} = require('../utils/schedule');
 
 const router = express.Router();
 
-// 所有手术路由都需要认证
+const SURGERY_FROM = `
+  SELECT s.id, s.doctor_id,
+         COALESCE(u.name, s.doctor_name) AS doctor_name,
+         s.patient_name, s.surgery_type, s.surgery_date,
+         s.start_time, s.end_time, s.operating_room,
+         s.status, s.notes, s.created_at, s.updated_at
+  FROM surgeries s
+  LEFT JOIN users u ON u.id = s.doctor_id
+`;
+
 router.use(authenticateToken);
 
-// 获取所有手术（可按日期、医生、手术室筛选）
-router.get('/', (req, res) => {
-  const { date, doctor_id, operating_room } = req.query;
-  const db = getDatabase();
-  let sql = 'SELECT * FROM surgeries WHERE 1=1';
-  let params = [];
+function requireDate(value, label) {
+  if (value === undefined || value === null || value === '') {
+    throw httpError(400, `请填写${label}`);
+  }
+  const normalized = normalizeDate(value);
+  if (!normalized) throw httpError(400, `${label}格式无效`);
+  return normalized;
+}
+
+function requireTime(value, label) {
+  if (value === undefined || value === null || value === '') {
+    throw httpError(400, `请填写${label}`);
+  }
+  const normalized = normalizeTime(value);
+  if (!normalized) throw httpError(400, `${label}格式无效`);
+  return normalized;
+}
+
+function requireText(value, label, maxLength) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    throw httpError(400, `请填写${label}`);
+  }
+  const text = String(value).trim();
+  if (text.length > maxLength) throw httpError(400, `${label}过长`);
+  return text;
+}
+
+function optionalDate(value, label) {
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = normalizeDate(value);
+  if (!normalized) throw httpError(400, `${label}格式无效`);
+  return normalized;
+}
+
+function optionalTime(value, label) {
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = normalizeTime(value);
+  if (!normalized) throw httpError(400, `${label}格式无效`);
+  return normalized;
+}
+
+function assertNoConflict(db, slot) {
+  if (findConflict(db, slot)) {
+    throw httpError(400, '该手术室在该时间段已被占用');
+  }
+}
+
+function listSurgeries(db, req) {
+  const { date, date_from, date_to, doctor_id, operating_room } = req.query;
+  const where = [];
+  const params = [];
 
   if (date) {
-    sql += ' AND surgery_date = ?';
-    params.push(date);
+    where.push('s.surgery_date = ?');
+    params.push(requireDate(date, '日期'));
+  } else {
+    const from = optionalDate(date_from, '开始日期');
+    const to = optionalDate(date_to, '结束日期');
+    if (from) {
+      where.push('s.surgery_date >= ?');
+      params.push(from);
+    }
+    if (to) {
+      where.push('s.surgery_date <= ?');
+      params.push(to);
+    }
   }
 
   if (req.user.role === 'doctor') {
-    const viewAll = req.query.view_all === 'true';
-    if (!viewAll) {
-      sql += ' AND doctor_id = ?';
+    if (req.query.view_all !== 'true') {
+      where.push('s.doctor_id = ?');
       params.push(req.user.id);
     }
   } else if (req.user.role === 'admin' && doctor_id) {
-    sql += ' AND doctor_id = ?';
+    where.push('s.doctor_id = ?');
     params.push(doctor_id);
   }
 
-  if (operating_room) {
-    sql += ' AND operating_room = ?';
-    params.push(operating_room);
+  if (typeof operating_room === 'string' && operating_room.trim() !== '') {
+    where.push('s.operating_room = ?');
+    params.push(operating_room.trim());
   }
 
-  sql += ' ORDER BY surgery_date, start_time';
+  const sql = `${SURGERY_FROM}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY s.surgery_date, s.start_time`;
+  return statement(db, sql).all(...params);
+}
 
+router.get('/', (req, res) => {
   try {
-    const surgeries = db.prepare(sql).all(...params);
-    res.json(surgeries || []);
+    res.json(listSurgeries(getDatabase(), req));
   } catch (err) {
-    console.error('查询手术失败:', err);
-    return res.status(500).json({ error: '查询手术失败: ' + err.message });
+    return sendRouteError(res, err, '查询手术失败');
   }
 });
 
-// 获取所有手术室列表
+router.get('/day-board', (req, res) => {
+  const db = getDatabase();
+  try {
+    const surgeries = listSurgeries(db, req);
+    const rooms = statement(
+      db,
+      'SELECT DISTINCT operating_room FROM surgeries ORDER BY operating_room'
+    ).all().map(room => room.operating_room);
+    res.json({ surgeries, rooms });
+  } catch (err) {
+    return sendRouteError(res, err, '查询手术室视图失败');
+  }
+});
+
 router.get('/operating-rooms', (req, res) => {
   const db = getDatabase();
   try {
-    const rooms = db.prepare('SELECT DISTINCT operating_room FROM surgeries ORDER BY operating_room').all();
-    res.json(rooms.map(r => r.operating_room));
+    const rooms = statement(
+      db,
+      'SELECT DISTINCT operating_room FROM surgeries ORDER BY operating_room'
+    ).all();
+    res.json(rooms.map(room => room.operating_room));
   } catch (err) {
-    console.error('查询手术室列表失败:', err);
-    return res.status(500).json({ error: '查询手术室列表失败: ' + err.message });
+    return sendRouteError(res, err, '查询手术室列表失败');
   }
 });
 
-// 获取单个手术详情
 router.get('/:id', (req, res) => {
-  const { id } = req.params;
   const db = getDatabase();
-
-  let sql = 'SELECT * FROM surgeries WHERE id = ?';
-  let params = [id];
+  const where = ['s.id = ?'];
+  const params = [req.params.id];
 
   if (req.user.role === 'doctor') {
-    sql += ' AND doctor_id = ?';
+    where.push('s.doctor_id = ?');
     params.push(req.user.id);
   }
 
   try {
-    const surgery = db.prepare(sql).get(...params);
+    const surgery = statement(db, `${SURGERY_FROM} WHERE ${where.join(' AND ')}`).get(...params);
     if (!surgery) {
       return res.status(404).json({ error: '手术不存在或无权限访问' });
     }
     res.json(surgery);
   } catch (err) {
-    console.error('查询手术失败:', err);
-    return res.status(500).json({ error: '查询手术失败: ' + err.message });
+    return sendRouteError(res, err, '查询手术失败');
   }
 });
 
-// 创建手术
 router.post('/', (req, res) => {
-  const { doctor_id, patient_name, surgery_type, surgery_date, start_time, end_time, operating_room, notes } = req.body;
-
-  if (!patient_name || !surgery_type || !surgery_date || !start_time || !end_time || !operating_room) {
-    return res.status(400).json({ error: '请填写所有必填字段' });
-  }
-
-  if (start_time >= end_time) {
-    return res.status(400).json({ error: '开始时间必须早于结束时间' });
-  }
-
-  const targetDoctorId = (doctor_id && req.user.role === 'admin') ? doctor_id : req.user.id;
   const db = getDatabase();
 
   try {
-    const conflict = db.prepare(
-      `SELECT * FROM surgeries 
-       WHERE operating_room = ? AND surgery_date = ? 
-       AND ((start_time <= ? AND end_time > ?) OR (start_time < ? AND end_time >= ?) OR (start_time >= ? AND end_time <= ?))`
-    ).get(operating_room, surgery_date, start_time, start_time, end_time, end_time, start_time, end_time);
+    const patientName = requireText(req.body.patient_name, '病人姓名', 100);
+    const surgeryType = requireText(req.body.surgery_type, '手术项目', 100);
+    const surgeryDate = requireDate(req.body.surgery_date, '手术日期');
+    const startTime = requireTime(req.body.start_time, '开始时间');
+    const endTime = requireTime(req.body.end_time, '结束时间');
+    const operatingRoom = requireText(req.body.operating_room, '手术室', 50);
+    const notes = req.body.notes == null ? '' : String(req.body.notes).slice(0, 2000);
 
-    if (conflict) {
-      return res.status(400).json({ error: '该手术室在该时间段已被占用' });
+    if (startTime >= endTime) {
+      throw httpError(400, '开始时间必须早于结束时间');
     }
 
-    const doctor = db.prepare('SELECT name FROM users WHERE id = ?').get(targetDoctorId);
-    if (!doctor) {
-      return res.status(404).json({ error: '医生不存在' });
-    }
+    const requestedDoctorId = req.user.role === 'admin' && req.body.doctor_id
+      ? req.body.doctor_id
+      : req.user.id;
 
-    const result = db.prepare(
-      `INSERT INTO surgeries 
-       (doctor_id, doctor_name, patient_name, surgery_type, surgery_date, start_time, end_time, operating_room, notes) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(targetDoctorId, doctor.name, patient_name, surgery_type, surgery_date, start_time, end_time, operating_room, notes || '');
+    const surgery = db.transaction(() => {
+      assertNoConflict(db, {
+        room: operatingRoom,
+        date: surgeryDate,
+        start: startTime,
+        end: endTime
+      });
 
-    const surgery = db.prepare('SELECT * FROM surgeries WHERE id = ?').get(result.lastInsertRowid);
+      const doctor = statement(db, 'SELECT id, name FROM users WHERE id = ?').get(requestedDoctorId);
+      if (!doctor) throw httpError(404, '医生不存在');
+
+      const result = statement(
+        db,
+        `INSERT INTO surgeries
+         (doctor_id, doctor_name, patient_name, surgery_type, surgery_date, start_time, end_time, operating_room, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        doctor.id,
+        doctor.name,
+        patientName,
+        surgeryType,
+        surgeryDate,
+        startTime,
+        endTime,
+        operatingRoom,
+        notes
+      );
+
+      return statement(db, `${SURGERY_FROM} WHERE s.id = ?`).get(result.lastInsertRowid);
+    })();
+
     res.status(201).json(surgery);
   } catch (err) {
-    console.error('创建手术失败:', err);
-    return res.status(500).json({ error: '创建手术失败: ' + err.message });
+    return sendRouteError(res, err, '创建手术失败');
   }
 });
 
-// 更新手术
 router.put('/:id', (req, res) => {
-  const { id } = req.params;
-  const { doctor_id, patient_name, surgery_type, surgery_date, start_time, end_time, operating_room, notes, status } = req.body;
-
   const db = getDatabase();
-
-  let checkSql = 'SELECT * FROM surgeries WHERE id = ?';
-  let checkParams = [id];
-
-  if (req.user.role === 'doctor') {
-    checkSql += ' AND doctor_id = ?';
-    checkParams.push(req.user.id);
-  }
 
   try {
-    const existingSurgery = db.prepare(checkSql).get(...checkParams);
-    if (!existingSurgery) {
-      return res.status(404).json({ error: '手术不存在或无权限修改' });
-    }
-
-    const effectiveStart = start_time || existingSurgery.start_time;
-    const effectiveEnd = end_time || existingSurgery.end_time;
-    if (effectiveStart >= effectiveEnd) {
-      return res.status(400).json({ error: '开始时间必须早于结束时间' });
-    }
-
-    const dateChanged = surgery_date && surgery_date !== existingSurgery.surgery_date;
-    const timeChanged = (start_time && start_time !== existingSurgery.start_time) || 
-                        (end_time && end_time !== existingSurgery.end_time);
-    const roomChanged = operating_room && operating_room !== existingSurgery.operating_room;
-
-    if (dateChanged || timeChanged || roomChanged) {
-      const checkDate = surgery_date || existingSurgery.surgery_date;
-      const checkStart = start_time || existingSurgery.start_time;
-      const checkEnd = end_time || existingSurgery.end_time;
-      const checkRoom = operating_room || existingSurgery.operating_room;
-
-      const conflict = db.prepare(
-        `SELECT * FROM surgeries 
-         WHERE id != ? AND operating_room = ? AND surgery_date = ? 
-         AND ((start_time <= ? AND end_time > ?) OR (start_time < ? AND end_time >= ?) OR (start_time >= ? AND end_time <= ?))`
-      ).get(id, checkRoom, checkDate, checkStart, checkStart, checkEnd, checkEnd, checkStart, checkEnd);
-
-      if (conflict) {
-        return res.status(400).json({ error: '该手术室在该时间段已被占用' });
+    const surgery = db.transaction(() => {
+      const where = ['s.id = ?'];
+      const params = [req.params.id];
+      if (req.user.role === 'doctor') {
+        where.push('s.doctor_id = ?');
+        params.push(req.user.id);
       }
-    }
 
-    let newDoctorName = null;
-    if (doctor_id && req.user.role === 'admin' && parseInt(doctor_id) !== existingSurgery.doctor_id) {
-      const newDoctor = db.prepare('SELECT name FROM users WHERE id = ?').get(doctor_id);
-      if (!newDoctor) {
-        return res.status(500).json({ error: '查询医生信息失败' });
+      const existing = statement(db, `${SURGERY_FROM} WHERE ${where.join(' AND ')}`).get(...params);
+      if (!existing) throw httpError(404, '手术不存在或无权限修改');
+
+      const patientName = req.body.patient_name !== undefined
+        ? requireText(req.body.patient_name, '病人姓名', 100)
+        : null;
+      const surgeryType = req.body.surgery_type !== undefined
+        ? requireText(req.body.surgery_type, '手术项目', 100)
+        : null;
+      const surgeryDate = optionalDate(req.body.surgery_date, '手术日期');
+      const startTime = optionalTime(req.body.start_time, '开始时间');
+      const endTime = optionalTime(req.body.end_time, '结束时间');
+      const operatingRoom = req.body.operating_room !== undefined
+        ? requireText(req.body.operating_room, '手术室', 50)
+        : null;
+
+      const effectiveStart = startTime || existing.start_time;
+      const effectiveEnd = endTime || existing.end_time;
+      if (effectiveStart >= effectiveEnd) {
+        throw httpError(400, '开始时间必须早于结束时间');
       }
-      newDoctorName = newDoctor.name;
-    }
 
-    const updateFields = [];
-    const updateValues = [];
-
-    if (doctor_id && req.user.role === 'admin' && parseInt(doctor_id) !== existingSurgery.doctor_id) {
-      updateFields.push('doctor_id = ?');
-      updateValues.push(doctor_id);
-      if (newDoctorName) {
-        updateFields.push('doctor_name = ?');
-        updateValues.push(newDoctorName);
+      let nextStatus = existing.status;
+      if (req.body.status !== undefined && req.body.status !== existing.status) {
+        if (req.user.role !== 'admin') {
+          throw httpError(403, '只有管理员可以修改手术状态');
+        }
+        if (!STATUSES.has(req.body.status)) {
+          throw httpError(400, '无效的手术状态');
+        }
+        nextStatus = req.body.status;
       }
-    }
-    if (patient_name) { updateFields.push('patient_name = ?'); updateValues.push(patient_name); }
-    if (surgery_type) { updateFields.push('surgery_type = ?'); updateValues.push(surgery_type); }
-    if (surgery_date) { updateFields.push('surgery_date = ?'); updateValues.push(surgery_date); }
-    if (start_time) { updateFields.push('start_time = ?'); updateValues.push(start_time); }
-    if (end_time) { updateFields.push('end_time = ?'); updateValues.push(end_time); }
-    if (operating_room) { updateFields.push('operating_room = ?'); updateValues.push(operating_room); }
-    if (notes !== undefined) { updateFields.push('notes = ?'); updateValues.push(notes); }
-    if (status) {
-      if (req.user.role !== 'admin') {
-        return res.status(403).json({ error: '只有管理员可以修改手术状态' });
+
+      const effectiveDate = surgeryDate || existing.surgery_date;
+      const effectiveRoom = operatingRoom || existing.operating_room;
+      const slotChanged = effectiveDate !== existing.surgery_date
+        || effectiveStart !== existing.start_time
+        || effectiveEnd !== existing.end_time
+        || effectiveRoom !== existing.operating_room;
+      const reactivating = existing.status === 'cancelled' && nextStatus !== 'cancelled';
+
+      if (nextStatus !== 'cancelled' && (slotChanged || reactivating)) {
+        assertNoConflict(db, {
+          room: effectiveRoom,
+          date: effectiveDate,
+          start: effectiveStart,
+          end: effectiveEnd,
+          excludeId: existing.id
+        });
       }
-      updateFields.push('status = ?');
-      updateValues.push(status);
-    }
 
-    if (updateFields.length === 0) {
-      return res.status(400).json({ error: '没有要更新的字段' });
-    }
+      const updateFields = [];
+      const updateValues = [];
 
-    updateFields.push('updated_at = CURRENT_TIMESTAMP');
-    updateValues.push(id);
+      if (req.user.role === 'admin' && req.body.doctor_id && Number(req.body.doctor_id) !== existing.doctor_id) {
+        const doctor = statement(db, 'SELECT id, name FROM users WHERE id = ?').get(req.body.doctor_id);
+        if (!doctor) throw httpError(404, '医生不存在');
+        updateFields.push('doctor_id = ?', 'doctor_name = ?');
+        updateValues.push(doctor.id, doctor.name);
+      }
+      if (patientName) {
+        updateFields.push('patient_name = ?');
+        updateValues.push(patientName);
+      }
+      if (surgeryType) {
+        updateFields.push('surgery_type = ?');
+        updateValues.push(surgeryType);
+      }
+      if (surgeryDate) {
+        updateFields.push('surgery_date = ?');
+        updateValues.push(surgeryDate);
+      }
+      if (startTime) {
+        updateFields.push('start_time = ?');
+        updateValues.push(startTime);
+      }
+      if (endTime) {
+        updateFields.push('end_time = ?');
+        updateValues.push(endTime);
+      }
+      if (operatingRoom) {
+        updateFields.push('operating_room = ?');
+        updateValues.push(operatingRoom);
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, 'notes')) {
+        updateFields.push('notes = ?');
+        updateValues.push(req.body.notes == null ? '' : String(req.body.notes).slice(0, 2000));
+      }
+      if (nextStatus !== existing.status) {
+        updateFields.push('status = ?');
+        updateValues.push(nextStatus);
+      }
 
-    db.prepare(`UPDATE surgeries SET ${updateFields.join(', ')} WHERE id = ?`).run(...updateValues);
+      if (updateFields.length === 0) {
+        throw httpError(400, '没有要更新的字段');
+      }
 
-    const surgery = db.prepare('SELECT * FROM surgeries WHERE id = ?').get(id);
+      updateFields.push('updated_at = CURRENT_TIMESTAMP');
+      updateValues.push(existing.id);
+      statement(db, `UPDATE surgeries SET ${updateFields.join(', ')} WHERE id = ?`).run(...updateValues);
+
+      return statement(db, `${SURGERY_FROM} WHERE s.id = ?`).get(existing.id);
+    })();
+
     res.json(surgery);
   } catch (err) {
-    console.error('更新手术失败:', err);
-    return res.status(500).json({ error: '更新手术失败: ' + err.message });
+    return sendRouteError(res, err, '更新手术失败');
   }
 });
 
-// 删除手术
 router.delete('/:id', (req, res) => {
-  const { id } = req.params;
   const db = getDatabase();
-
   let sql = 'DELETE FROM surgeries WHERE id = ?';
-  let params = [id];
+  const params = [req.params.id];
 
   if (req.user.role === 'doctor') {
     sql += ' AND doctor_id = ?';
@@ -243,14 +358,13 @@ router.delete('/:id', (req, res) => {
   }
 
   try {
-    const result = db.prepare(sql).run(...params);
+    const result = statement(db, sql).run(...params);
     if (result.changes === 0) {
       return res.status(404).json({ error: '手术不存在或无权限删除' });
     }
     res.json({ message: '手术已删除' });
   } catch (err) {
-    console.error('删除手术失败:', err);
-    return res.status(500).json({ error: '删除手术失败: ' + err.message });
+    return sendRouteError(res, err, '删除手术失败');
   }
 });
 

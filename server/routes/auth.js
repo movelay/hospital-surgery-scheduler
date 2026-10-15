@@ -6,7 +6,7 @@ const { getDatabase } = require('../database/init');
 const router = express.Router();
 
 // 登录
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -21,7 +21,7 @@ router.post('/login', (req, res) => {
       return res.status(401).json({ error: '用户名或密码错误' });
     }
 
-    const isMatch = bcrypt.compareSync(password, user.password);
+    const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ error: '用户名或密码错误' });
     }

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hospital-scheduler-v1';
+const CACHE_NAME = 'hospital-scheduler-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -10,9 +10,7 @@ const STATIC_ASSETS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS);
-    })
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS).catch(() => {}))
   );
   self.skipWaiting();
 });
@@ -30,36 +28,49 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+function offlineJson() {
+  return new Response(JSON.stringify({ error: '网络连接失败，请检查网络' }), {
+    status: 503,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function cacheResponse(request, response) {
+  if (response && response.status === 200 && response.type === 'basic') {
+    const clone = response.clone();
+    caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+  }
+  return response;
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  const url = new URL(request.url);
+  if (request.method !== 'GET') return;
 
-  // API requests: network-first, no cache fallback
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.endsWith('/sw.js')) return;
+
   if (url.pathname.startsWith('/api/')) {
+    event.respondWith(fetch(request).catch(() => offlineJson()));
+    return;
+  }
+
+  const isNavigation = request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('.html');
+  if (isNavigation) {
     event.respondWith(
-      fetch(request).catch(() =>
-        new Response(JSON.stringify({ error: '网络连接失败，请检查网络' }), {
-          status: 503,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      )
+      fetch(request)
+        .then((response) => cacheResponse(request, response))
+        .catch(() => caches.match(request).then((cached) => cached || caches.match('/index.html')))
     );
     return;
   }
 
-  // Static assets: cache-first, then network
   event.respondWith(
     caches.match(request).then((cached) => {
       const fetched = fetch(request)
-        .then((response) => {
-          if (response && response.status === 200 && response.type === 'basic') {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-          }
-          return response;
-        })
+        .then((response) => cacheResponse(request, response))
         .catch(() => cached);
-
       return cached || fetched;
     })
   );

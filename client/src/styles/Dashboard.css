@@ -91,6 +91,11 @@
   font-size: 14px;
 }
 
+.toolbar-status {
+  color: #666;
+  font-size: 13px;
+}
+
 .create-button {
   padding: 10px 20px;
   background-color: #28a745;

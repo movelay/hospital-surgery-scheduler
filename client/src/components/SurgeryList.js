@@ -63,4 +63,4 @@ const SurgeryList = ({ surgeries, onEdit, onDelete, isAdmin = false }) => {
   );
 };
 
-export default SurgeryList;
+export default React.memo(SurgeryList);
