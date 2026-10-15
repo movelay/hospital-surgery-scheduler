@@ -15,8 +15,16 @@ if (!fs.existsSync(dbDir)) {
 // 创建持久的数据库连接
 const db = new Database(DB_PATH);
 
-// 启用外键约束
+// WAL 让读请求不必等待写完成；busy_timeout 避免短暂锁冲突直接失败。
+try {
+  db.pragma('journal_mode = WAL');
+} catch (err) {
+  console.warn('无法启用 WAL，继续使用默认日志模式:', err.message);
+}
+db.pragma('synchronous = NORMAL');
+db.pragma('busy_timeout = 5000');
 db.pragma('foreign_keys = ON');
+db.pragma('cache_size = -16000');
 
 // 获取数据库连接
 function getDatabase() {
@@ -25,6 +33,11 @@ function getDatabase() {
 
 // 关闭数据库连接
 function closeDatabase() {
+  try {
+    db.pragma('optimize');
+  } catch (err) {
+    // 关闭前的统计优化失败不影响退出
+  }
   db.close();
   return Promise.resolve();
 }
@@ -60,6 +73,18 @@ function initDatabase() {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (doctor_id) REFERENCES users(id)
       )`);
+
+      db.exec(`
+        UPDATE surgeries
+          SET operating_room = TRIM(operating_room)
+          WHERE operating_room != TRIM(operating_room);
+        CREATE INDEX IF NOT EXISTS idx_surgeries_date_time
+          ON surgeries(surgery_date, start_time);
+        CREATE INDEX IF NOT EXISTS idx_surgeries_room_date
+          ON surgeries(operating_room, surgery_date, start_time, end_time);
+        CREATE INDEX IF NOT EXISTS idx_surgeries_doctor_date
+          ON surgeries(doctor_id, surgery_date, start_time);
+      `);
 
       // 检查并创建默认管理员账户
       const row = db.prepare('SELECT * FROM users WHERE username = ?').get('admin');

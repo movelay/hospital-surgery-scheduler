@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { getDatabase } = require('../database/init');
+const { statement } = require('../database/statements');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
@@ -9,7 +10,7 @@ const router = express.Router();
 router.get('/', authenticateToken, requireAdmin, (req, res) => {
   const db = getDatabase();
   try {
-    const users = db.prepare('SELECT id, username, name, role, created_at FROM users ORDER BY created_at DESC').all();
+    const users = statement(db, 'SELECT id, username, name, role, created_at FROM users ORDER BY created_at DESC').all();
     res.json(users);
   } catch (err) {
     console.error('查询用户失败:', err);
@@ -21,7 +22,7 @@ router.get('/', authenticateToken, requireAdmin, (req, res) => {
 router.get('/doctors', authenticateToken, (req, res) => {
   const db = getDatabase();
   try {
-    const doctors = db.prepare('SELECT id, name, username, role FROM users ORDER BY role, name').all();
+    const doctors = statement(db, 'SELECT id, name, username, role FROM users ORDER BY role, name').all();
     res.json(doctors);
   } catch (err) {
     console.error('查询医生列表失败:', err);
@@ -30,7 +31,7 @@ router.get('/doctors', authenticateToken, (req, res) => {
 });
 
 // 创建用户（仅管理员）
-router.post('/', authenticateToken, requireAdmin, (req, res) => {
+router.post('/', authenticateToken, requireAdmin, async (req, res) => {
   const { username, password, name, role = 'doctor' } = req.body;
 
   if (!username || !password || !name) {
@@ -41,15 +42,16 @@ router.post('/', authenticateToken, requireAdmin, (req, res) => {
     return res.status(400).json({ error: '角色必须是admin或doctor' });
   }
 
-  const hashedPassword = bcrypt.hashSync(password, 10);
   const db = getDatabase();
 
   try {
-    const result = db.prepare(
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const result = statement(
+      db,
       'INSERT INTO users (username, password, name, role) VALUES (?, ?, ?, ?)'
     ).run(username, hashedPassword, name, role);
 
-    const user = db.prepare('SELECT id, username, name, role, created_at FROM users WHERE id = ?').get(result.lastInsertRowid);
+    const user = statement(db, 'SELECT id, username, name, role, created_at FROM users WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(user);
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE constraint')) {
@@ -70,14 +72,14 @@ router.delete('/:id', authenticateToken, requireAdmin, (req, res) => {
   const db = getDatabase();
 
   try {
-    const result = db.prepare('SELECT COUNT(*) as count FROM surgeries WHERE doctor_id = ?').get(id);
+    const result = statement(db, 'SELECT COUNT(*) as count FROM surgeries WHERE doctor_id = ?').get(id);
     if (result.count > 0) {
       return res.status(400).json({ 
         error: `该用户有 ${result.count} 条关联手术记录，请先删除或转移这些手术后再删除用户` 
       });
     }
 
-    const delResult = db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    const delResult = statement(db, 'DELETE FROM users WHERE id = ?').run(id);
     if (delResult.changes === 0) {
       return res.status(404).json({ error: '用户不存在' });
     }
@@ -88,16 +90,26 @@ router.delete('/:id', authenticateToken, requireAdmin, (req, res) => {
 });
 
 // 更新用户（仅管理员）
-router.put('/:id', authenticateToken, requireAdmin, (req, res) => {
+router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { username, name, role, password } = req.body;
 
   const db = getDatabase();
+  const existing = statement(db, 'SELECT id, name FROM users WHERE id = ?').get(id);
+  if (!existing) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+
   const updateFields = [];
   const updateValues = [];
+  let renamedTo = null;
 
   if (username) { updateFields.push('username = ?'); updateValues.push(username); }
-  if (name) { updateFields.push('name = ?'); updateValues.push(name); }
+  if (name) {
+    updateFields.push('name = ?');
+    updateValues.push(name);
+    if (name !== existing.name) renamedTo = name;
+  }
   if (role) {
     if (role !== 'admin' && role !== 'doctor') {
       return res.status(400).json({ error: '角色必须是admin或doctor' });
@@ -107,7 +119,7 @@ router.put('/:id', authenticateToken, requireAdmin, (req, res) => {
   }
   if (password) {
     updateFields.push('password = ?');
-    updateValues.push(bcrypt.hashSync(password, 10));
+    updateValues.push(await bcrypt.hash(password, 10));
   }
 
   if (updateFields.length === 0) {
@@ -117,12 +129,15 @@ router.put('/:id', authenticateToken, requireAdmin, (req, res) => {
   updateValues.push(id);
 
   try {
-    const result = db.prepare(`UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`).run(...updateValues);
-    if (result.changes === 0) {
-      return res.status(404).json({ error: '用户不存在' });
-    }
+    const apply = db.transaction(() => {
+      statement(db, `UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`).run(...updateValues);
+      if (renamedTo) {
+        statement(db, 'UPDATE surgeries SET doctor_name = ? WHERE doctor_id = ?').run(renamedTo, existing.id);
+      }
+    });
+    apply();
 
-    const user = db.prepare('SELECT id, username, name, role, created_at FROM users WHERE id = ?').get(id);
+    const user = statement(db, 'SELECT id, username, name, role, created_at FROM users WHERE id = ?').get(id);
     res.json(user);
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE constraint')) {

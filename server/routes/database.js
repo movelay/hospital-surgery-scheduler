@@ -1,34 +1,52 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const bodyParser = require('body-parser');
 const { getDatabase } = require('../database/init');
+const { statement } = require('../database/statements');
+const { findConflict } = require('../database/conflicts');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { localDateString } = require('../utils/schedule');
 const path = require('path');
 const fs = require('fs');
 
 const router = express.Router();
+const restoreParser = bodyParser.json({ limit: '50mb' });
 
 router.use(authenticateToken);
 router.use(requireAdmin);
 
-// 获取数据库统计信息
+function databasePath() {
+  return process.env.DB_PATH || path.join(__dirname, '../../data/hospital.db');
+}
+
+function databaseFileSize(dbPath) {
+  let size = 0;
+  for (const suffix of ['', '-wal', '-shm']) {
+    try {
+      size += fs.statSync(dbPath + suffix).size;
+    } catch (err) {
+      // 文件不存在时忽略
+    }
+  }
+  return size;
+}
+
 router.get('/stats', (req, res) => {
   const db = getDatabase();
   try {
-    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
-    const surgeryCount = db.prepare('SELECT COUNT(*) as count FROM surgeries').get().count;
-    const completedSurgeryCount = db.prepare('SELECT COUNT(*) as count FROM surgeries WHERE status = "completed"').get().count;
-
-    const dbPath = process.env.DB_PATH || path.join(__dirname, '../../data/hospital.db');
-    let dbSize = 0;
-    try {
-      dbSize = fs.statSync(dbPath).size;
-    } catch (e) {}
+    const counts = statement(db, `
+      SELECT
+        (SELECT COUNT(*) FROM users) AS userCount,
+        (SELECT COUNT(*) FROM surgeries) AS surgeryCount,
+        (SELECT COUNT(*) FROM surgeries WHERE status = 'completed') AS completedSurgeryCount
+    `).get();
+    const dbPath = databasePath();
 
     res.json({
-      userCount,
-      surgeryCount,
-      completedSurgeryCount,
-      dbSize,
+      userCount: counts.userCount,
+      surgeryCount: counts.surgeryCount,
+      completedSurgeryCount: counts.completedSurgeryCount,
+      dbSize: databaseFileSize(dbPath),
       dbPath
     });
   } catch (err) {
@@ -36,51 +54,44 @@ router.get('/stats', (req, res) => {
   }
 });
 
-// 导出数据库（备份）
+function sendBackup(res, backup, filename) {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+  res.json(backup);
+}
+
 router.get('/backup', (req, res) => {
   const db = getDatabase();
   try {
-    const users = db.prepare('SELECT id, username, name, role, created_at FROM users').all();
-    const surgeries = db.prepare('SELECT * FROM surgeries').all();
-
-    const backup = {
+    const users = statement(db, 'SELECT id, username, name, role, created_at FROM users').all();
+    const surgeries = statement(db, 'SELECT * FROM surgeries').all();
+    sendBackup(res, {
       version: '1.0',
       exportDate: new Date().toISOString(),
       data: { users, surgeries }
-    };
-
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename=hospital_backup_${new Date().toISOString().split('T')[0]}.json`);
-    res.json(backup);
+    }, `hospital_backup_${localDateString()}.json`);
   } catch (err) {
     return res.status(500).json({ error: '导出用户数据失败: ' + err.message });
   }
 });
 
-// 导出完整数据库
 router.get('/backup/full', (req, res) => {
   const db = getDatabase();
   try {
-    const users = db.prepare('SELECT * FROM users').all();
-    const surgeries = db.prepare('SELECT * FROM surgeries').all();
-
-    const backup = {
+    const users = statement(db, 'SELECT * FROM users').all();
+    const surgeries = statement(db, 'SELECT * FROM surgeries').all();
+    sendBackup(res, {
       version: '1.0',
       exportDate: new Date().toISOString(),
       type: 'full',
       data: { users, surgeries }
-    };
-
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename=hospital_full_backup_${new Date().toISOString().split('T')[0]}.json`);
-    res.json(backup);
+    }, `hospital_full_backup_${localDateString()}.json`);
   } catch (err) {
     return res.status(500).json({ error: '导出用户数据失败: ' + err.message });
   }
 });
 
-// 导入数据库（恢复）
-router.post('/restore', (req, res) => {
+router.post('/restore', restoreParser, (req, res) => {
   const { backup, mode } = req.body;
 
   if (!backup || !backup.data) {
@@ -89,101 +100,135 @@ router.post('/restore', (req, res) => {
 
   const db = getDatabase();
   const replaceMode = mode === 'replace';
+  const fallbackPassword = bcrypt.hashSync('changeme123', 10);
 
-  const stats = {
-    userImportCount: 0,
-    userSkipCount: 0,
-    surgeryImportCount: 0,
-    surgerySkipCount: 0,
-    errors: []
-  };
+  const deleteSurgeries = statement(db, 'DELETE FROM surgeries');
+  const deleteUsers = statement(db, 'DELETE FROM users WHERE username != ?');
+  const findUser = statement(db, 'SELECT id FROM users WHERE username = ?');
+  const insertUserReplace = statement(
+    db,
+    'INSERT INTO users (id, username, password, name, role, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  );
+  const insertUserMerge = statement(
+    db,
+    'INSERT INTO users (username, password, name, role, created_at) VALUES (?, ?, ?, ?, ?)'
+  );
+  const findDuplicateSurgery = statement(
+    db,
+    `SELECT id FROM surgeries
+     WHERE operating_room = ? AND surgery_date = ? AND start_time = ? AND end_time = ? AND patient_name = ?`
+  );
+  const insertSurgeryReplace = statement(
+    db,
+    `INSERT INTO surgeries
+     (id, doctor_id, doctor_name, patient_name, surgery_type, surgery_date,
+      start_time, end_time, operating_room, status, notes, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const insertSurgeryMerge = statement(
+    db,
+    `INSERT INTO surgeries
+     (doctor_id, doctor_name, patient_name, surgery_type, surgery_date,
+      start_time, end_time, operating_room, status, notes, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
 
   try {
-    if (replaceMode) {
-      db.prepare('DELETE FROM surgeries').run();
-      db.prepare('DELETE FROM users WHERE username != "admin"').run();
-    }
+    const stats = db.transaction(() => {
+      const result = {
+        userImportCount: 0,
+        userSkipCount: 0,
+        surgeryImportCount: 0,
+        surgerySkipCount: 0,
+        errors: []
+      };
 
-    const users = (backup.data.users || []).filter(u => u.username !== 'admin');
-    const surgeries = backup.data.surgeries || [];
-
-    for (const user of users) {
-      const password = backup.type === 'full' && user.password
-        ? user.password
-        : bcrypt.hashSync('changeme123', 10);
-
-      if (!replaceMode) {
-        const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(user.username);
-        if (existing) {
-          stats.userSkipCount++;
-          continue;
-        }
+      if (replaceMode) {
+        deleteSurgeries.run();
+        deleteUsers.run('admin');
       }
 
-      try {
-        if (replaceMode) {
-          db.prepare(
-            'INSERT INTO users (id, username, password, name, role, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-          ).run(user.id, user.username, password, user.name, user.role || 'doctor', user.created_at || new Date().toISOString());
-        } else {
-          db.prepare(
-            'INSERT INTO users (username, password, name, role, created_at) VALUES (?, ?, ?, ?, ?)'
-          ).run(user.username, password, user.name, user.role || 'doctor', user.created_at || new Date().toISOString());
-        }
-        stats.userImportCount++;
-      } catch (err) {
-        stats.errors.push(`导入用户 ${user.username} 失败: ${err.message}`);
-      }
-    }
+      const users = (backup.data.users || []).filter(user => user.username !== 'admin');
+      const surgeries = backup.data.surgeries || [];
 
-    for (const surgery of surgeries) {
-      if (!replaceMode) {
-        const existing = db.prepare(
-          `SELECT id FROM surgeries WHERE operating_room = ? AND surgery_date = ? AND start_time = ? AND end_time = ? AND patient_name = ?`
-        ).get(surgery.operating_room, surgery.surgery_date, surgery.start_time, surgery.end_time, surgery.patient_name);
-        if (existing) {
-          stats.surgerySkipCount++;
+      for (const user of users) {
+        const password = backup.type === 'full' && user.password
+          ? user.password
+          : fallbackPassword;
+
+        if (!replaceMode && findUser.get(user.username)) {
+          result.userSkipCount++;
           continue;
         }
 
-        const conflict = db.prepare(
-          `SELECT id FROM surgeries WHERE operating_room = ? AND surgery_date = ? 
-           AND ((start_time <= ? AND end_time > ?) OR (start_time < ? AND end_time >= ?) OR (start_time >= ? AND end_time <= ?))`
-        ).get(surgery.operating_room, surgery.surgery_date,
-          surgery.start_time, surgery.start_time, surgery.end_time, surgery.end_time,
-          surgery.start_time, surgery.end_time);
-        if (conflict) {
-          stats.surgerySkipCount++;
-          stats.errors.push(`手术 ${surgery.patient_name} (${surgery.surgery_date} ${surgery.start_time}) 与现有手术冲突，已跳过`);
-          continue;
+        try {
+          const createdAt = user.created_at || new Date().toISOString();
+          if (replaceMode) {
+            insertUserReplace.run(user.id, user.username, password, user.name, user.role || 'doctor', createdAt);
+          } else {
+            insertUserMerge.run(user.username, password, user.name, user.role || 'doctor', createdAt);
+          }
+          result.userImportCount++;
+        } catch (err) {
+          result.errors.push(`导入用户 ${user.username} 失败: ${err.message}`);
         }
       }
 
-      try {
-        if (replaceMode) {
-          db.prepare(
-            `INSERT INTO surgeries (id, doctor_id, doctor_name, patient_name, surgery_type, surgery_date, 
-             start_time, end_time, operating_room, status, notes, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          ).run(surgery.id, surgery.doctor_id, surgery.doctor_name, surgery.patient_name, surgery.surgery_type,
-            surgery.surgery_date, surgery.start_time, surgery.end_time, surgery.operating_room,
-            surgery.status || 'scheduled', surgery.notes || '',
-            surgery.created_at || new Date().toISOString(), surgery.updated_at || new Date().toISOString());
-        } else {
-          db.prepare(
-            `INSERT INTO surgeries (doctor_id, doctor_name, patient_name, surgery_type, surgery_date, 
-             start_time, end_time, operating_room, status, notes, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          ).run(surgery.doctor_id, surgery.doctor_name, surgery.patient_name, surgery.surgery_type,
-            surgery.surgery_date, surgery.start_time, surgery.end_time, surgery.operating_room,
-            surgery.status || 'scheduled', surgery.notes || '',
-            surgery.created_at || new Date().toISOString(), surgery.updated_at || new Date().toISOString());
+      for (const surgery of surgeries) {
+        if (!replaceMode) {
+          const duplicate = findDuplicateSurgery.get(
+            surgery.operating_room,
+            surgery.surgery_date,
+            surgery.start_time,
+            surgery.end_time,
+            surgery.patient_name
+          );
+          if (duplicate) {
+            result.surgerySkipCount++;
+            continue;
+          }
+
+          if (surgery.status !== 'cancelled') {
+            const conflict = findConflict(db, {
+              room: surgery.operating_room,
+              date: surgery.surgery_date,
+              start: surgery.start_time,
+              end: surgery.end_time
+            });
+            if (conflict) {
+              result.surgerySkipCount++;
+              result.errors.push(`手术 ${surgery.patient_name} (${surgery.surgery_date} ${surgery.start_time}) 与现有手术冲突，已跳过`);
+              continue;
+            }
+          }
         }
-        stats.surgeryImportCount++;
-      } catch (err) {
-        stats.errors.push(`导入手术 ${surgery.patient_name} 失败: ${err.message}`);
+
+        try {
+          const createdAt = surgery.created_at || new Date().toISOString();
+          const updatedAt = surgery.updated_at || new Date().toISOString();
+          const status = surgery.status || 'scheduled';
+          const notes = surgery.notes || '';
+          if (replaceMode) {
+            insertSurgeryReplace.run(
+              surgery.id, surgery.doctor_id, surgery.doctor_name, surgery.patient_name, surgery.surgery_type,
+              surgery.surgery_date, surgery.start_time, surgery.end_time, surgery.operating_room,
+              status, notes, createdAt, updatedAt
+            );
+          } else {
+            insertSurgeryMerge.run(
+              surgery.doctor_id, surgery.doctor_name, surgery.patient_name, surgery.surgery_type,
+              surgery.surgery_date, surgery.start_time, surgery.end_time, surgery.operating_room,
+              status, notes, createdAt, updatedAt
+            );
+          }
+          result.surgeryImportCount++;
+        } catch (err) {
+          result.errors.push(`导入手术 ${surgery.patient_name} 失败: ${err.message}`);
+        }
       }
-    }
+
+      return result;
+    })();
 
     res.json({
       success: true,
@@ -201,7 +246,6 @@ router.post('/restore', (req, res) => {
   }
 });
 
-// 清空数据库
 router.post('/clear', (req, res) => {
   const { confirm } = req.body;
 
@@ -211,8 +255,16 @@ router.post('/clear', (req, res) => {
 
   const db = getDatabase();
   try {
-    db.prepare('DELETE FROM surgeries').run();
-    db.prepare('DELETE FROM users WHERE username != "admin"').run();
+    const clearAll = db.transaction(() => {
+      statement(db, 'DELETE FROM surgeries').run();
+      statement(db, 'DELETE FROM users WHERE username != ?').run('admin');
+    });
+    clearAll();
+    try {
+      db.exec('VACUUM');
+    } catch (err) {
+      console.warn('清空后压缩数据库失败:', err.message);
+    }
     res.json({ success: true, message: '数据已清空（保留管理员账户）' });
   } catch (err) {
     return res.status(500).json({ error: '清空数据失败: ' + err.message });

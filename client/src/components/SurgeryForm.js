@@ -3,6 +3,7 @@ import { surgeryAPI } from '../services/api';
 import { userAPI } from '../services/api';
 import { useAuth } from '../services/AuthContext';
 import TimeSlotVisualizer from './TimeSlotVisualizer';
+import { localDateString } from '../utils/date';
 import '../styles/SurgeryForm.css';
 
 const SurgeryForm = ({ surgery, onClose, onSuccess, isAdmin = false }) => {
@@ -11,7 +12,7 @@ const SurgeryForm = ({ surgery, onClose, onSuccess, isAdmin = false }) => {
     doctor_id: '',
     patient_name: '',
     surgery_type: '',
-    surgery_date: new Date().toISOString().split('T')[0],
+    surgery_date: localDateString(),
     start_time: '',
     end_time: '',
     operating_room: '',
@@ -47,7 +48,7 @@ const SurgeryForm = ({ surgery, onClose, onSuccess, isAdmin = false }) => {
         doctor_id: surgery.doctor_id ? surgery.doctor_id.toString() : '',
         patient_name: surgery.patient_name || '',
         surgery_type: surgery.surgery_type || '',
-        surgery_date: surgery.surgery_date || new Date().toISOString().split('T')[0],
+        surgery_date: surgery.surgery_date || localDateString(),
         start_time: surgery.start_time || '',
         end_time: surgery.end_time || '',
         operating_room: surgery.operating_room || '',
@@ -80,10 +81,23 @@ const SurgeryForm = ({ surgery, onClose, onSuccess, isAdmin = false }) => {
     setLoading(true);
 
     try {
+      const payload = {
+        patient_name: formData.patient_name,
+        surgery_type: formData.surgery_type,
+        surgery_date: formData.surgery_date,
+        start_time: formData.start_time,
+        end_time: formData.end_time,
+        operating_room: formData.operating_room,
+        notes: formData.notes
+      };
+      if (isAdmin) {
+        payload.doctor_id = formData.doctor_id;
+        payload.status = formData.status;
+      }
       if (surgery) {
-        await surgeryAPI.update(surgery.id, formData);
+        await surgeryAPI.update(surgery.id, payload);
       } else {
-        await surgeryAPI.create(formData);
+        await surgeryAPI.create(payload);
       }
       onSuccess();
     } catch (error) {

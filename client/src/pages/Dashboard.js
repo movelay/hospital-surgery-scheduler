@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../services/AuthContext';
 import { surgeryAPI } from '../services/api';
 import SurgeryList from '../components/SurgeryList';
 import SurgeryForm from '../components/SurgeryForm';
 import OperatingRoomView from '../components/OperatingRoomView';
+import { localDateString } from '../utils/date';
 import '../styles/Dashboard.css';
 
 const Dashboard = () => {
@@ -13,9 +14,10 @@ const Dashboard = () => {
   const [showForm, setShowForm] = useState(false);
   const [showRoomView, setShowRoomView] = useState(false);
   const [editingSurgery, setEditingSurgery] = useState(null);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(() => localDateString());
+  const [refreshing, setRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState('my'); // 'my', 'all', 'by-doctor', 'by-room'
-  const [groupedSurgeries, setGroupedSurgeries] = useState({});
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
     fetchSurgeries();
@@ -24,42 +26,33 @@ const Dashboard = () => {
 
   const fetchSurgeries = async () => {
     try {
-      setLoading(true);
+      if (hasLoadedRef.current) setRefreshing(true);
+      else setLoading(true);
       const viewAll = viewMode !== 'my';
       const response = await surgeryAPI.getAll(selectedDate, null, null, viewAll);
-      const allSurgeries = response.data;
-      setSurgeries(allSurgeries);
-      
-      // 根据查看模式分组
-      if (viewMode === 'by-doctor') {
-        const grouped = {};
-        allSurgeries.forEach(surgery => {
-          const key = `${surgery.doctor_name} (ID: ${surgery.doctor_id})`;
-          if (!grouped[key]) {
-            grouped[key] = [];
-          }
-          grouped[key].push(surgery);
-        });
-        setGroupedSurgeries(grouped);
-      } else if (viewMode === 'by-room') {
-        const grouped = {};
-        allSurgeries.forEach(surgery => {
-          if (!grouped[surgery.operating_room]) {
-            grouped[surgery.operating_room] = [];
-          }
-          grouped[surgery.operating_room].push(surgery);
-        });
-        setGroupedSurgeries(grouped);
-      } else {
-        setGroupedSurgeries({});
-      }
+      setSurgeries(response.data);
+      hasLoadedRef.current = true;
     } catch (error) {
       console.error('获取手术列表失败:', error);
       alert('获取手术列表失败');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
+
+  const groupedSurgeries = useMemo(() => {
+    if (viewMode !== 'by-doctor' && viewMode !== 'by-room') return null;
+    const grouped = {};
+    surgeries.forEach(surgery => {
+      const key = viewMode === 'by-doctor'
+        ? `${surgery.doctor_name} (ID: ${surgery.doctor_id})`
+        : surgery.operating_room;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(surgery);
+    });
+    return grouped;
+  }, [surgeries, viewMode]);
 
   const handleCreate = () => {
     setEditingSurgery(null);
@@ -116,6 +109,7 @@ const Dashboard = () => {
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
             />
+            {refreshing && <span className="toolbar-status">更新中...</span>}
           </div>
           <div className="view-mode-selector">
             <label>查看模式：</label>

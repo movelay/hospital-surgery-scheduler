@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { databaseAPI } from '../services/api';
+import { localDateString } from '../utils/date';
 import '../styles/DatabaseManagement.css';
 
 const DatabaseManagement = ({ onClose }) => {
@@ -48,7 +49,7 @@ const DatabaseManagement = ({ onClose }) => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `hospital_${full ? 'full_' : ''}backup_${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `hospital_${full ? 'full_' : ''}backup_${localDateString()}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

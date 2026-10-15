@@ -4,6 +4,8 @@ client/build/
 dist/
 dist-server/
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 .env
 .DS_Store

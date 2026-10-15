@@ -7,9 +7,11 @@ axios.defaults.headers.common['Content-Type'] = 'application/json';
 
 // 手术相关API
 export const surgeryAPI = {
-  getAll: (date, doctorId, operatingRoom, viewAll) => {
+  getAll: (date, doctorId, operatingRoom, viewAll, dateFrom, dateTo) => {
     const params = {};
     if (date) params.date = date;
+    if (dateFrom) params.date_from = dateFrom;
+    if (dateTo) params.date_to = dateTo;
     if (doctorId) params.doctor_id = doctorId;
     if (operatingRoom) params.operating_room = operatingRoom;
     if (viewAll) params.view_all = 'true';

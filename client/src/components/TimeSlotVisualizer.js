@@ -1,344 +1,309 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { surgeryAPI } from '../services/api';
+import { addDays, formatMonthDay } from '../utils/date';
 import '../styles/TimeSlotVisualizer.css';
 
-const TimeSlotVisualizer = ({ 
-  operatingRoom, 
-  surgeryDate, 
-  startTime, 
-  endTime, 
+const HOURS = 24;
+const HOUR_HEIGHT = 40;
+const DATE_WIDTH = 200;
+const DAYS_TO_SHOW = 7;
+
+function timeToHour(timeStr) {
+  if (!timeStr) return 0;
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  return hours + minutes / 60;
+}
+
+function hourToTime(hour) {
+  const totalMinutes = Math.max(0, Math.min(HOURS * 60 - 1, Math.round(hour * 60)));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function rangesOverlap(startHour, endHour, surgery) {
+  const start = timeToHour(surgery.start_time);
+  const end = timeToHour(surgery.end_time);
+  return startHour < end && endHour > start;
+}
+
+const TimeSlotVisualizer = ({
+  operatingRoom,
+  surgeryDate,
+  startTime,
+  endTime,
   onTimeChange,
-  excludeSurgeryId = null // 编辑时排除当前手术
+  excludeSurgeryId = null
 }) => {
   const [surgeries, setSurgeries] = useState([]);
   const [loading, setLoading] = useState(false);
   const [hoveredSurgery, setHoveredSurgery] = useState(null);
-  const [hoverPosition, setHoverPosition] = useState({ x: 0, y: 0 });
-  const [selectedStart, setSelectedStart] = useState(null);
-  const [selectedEnd, setSelectedEnd] = useState(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStartY, setDragStartY] = useState(null);
+  const [selection, setSelection] = useState({ start: null, end: null });
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const tooltipRef = useRef(null);
+  const pointerRef = useRef({ x: 0, y: 0 });
+  const selectionRef = useRef({ start: null, end: null });
+  const dragOriginRef = useRef(null);
+  const hoveredIdRef = useRef(null);
+  const rafRef = useRef(0);
+  const datesRef = useRef([]);
+  const byDateRef = useRef(new Map());
+  const surgeryDateRef = useRef(surgeryDate);
 
-  const HOURS = 24;
-  const HOUR_HEIGHT = 40; // 每个小时的高度（像素）
-  const DATE_WIDTH = 200; // 每个日期的宽度
-  const DAYS_TO_SHOW = 7; // 显示7天
+  const dates = useMemo(() => {
+    if (!surgeryDate) return [];
+    return Array.from({ length: DAYS_TO_SHOW }, (_, index) => addDays(surgeryDate, index));
+  }, [surgeryDate]);
 
-  useEffect(() => {
-    if (operatingRoom && surgeryDate) {
-      fetchSurgeries();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [operatingRoom, surgeryDate]);
-
-  useEffect(() => {
-    if (startTime && endTime) {
-      const startHour = timeToHour(startTime);
-      const endHour = timeToHour(endTime);
-      setSelectedStart(startHour);
-      setSelectedEnd(endHour);
-    }
-  }, [startTime, endTime]);
-
-  useEffect(() => {
-    drawCanvas();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [surgeries, selectedStart, selectedEnd, hoveredSurgery]);
-
-  const fetchSurgeries = async () => {
-    if (!operatingRoom) return;
-    
-    setLoading(true);
-    try {
-      // 获取未来7天的数据
-      const startDate = new Date(surgeryDate);
-      const allSurgeries = [];
-      
-      for (let i = 0; i < DAYS_TO_SHOW; i++) {
-        const date = new Date(startDate);
-        date.setDate(date.getDate() + i);
-        const dateStr = date.toISOString().split('T')[0];
-        
-        try {
-          // 必须拉取该手术室全部手术（view_all=true），否则医生只能看到自己的，无法正确显示占用与冲突
-          const response = await surgeryAPI.getAll(dateStr, null, operatingRoom, true);
-          const daySurgeries = response.data.filter(s => 
-            s.operating_room === operatingRoom && 
-            s.id !== excludeSurgeryId
-          );
-          allSurgeries.push(...daySurgeries);
-        } catch (error) {
-          console.error(`获取 ${dateStr} 的数据失败:`, error);
-        }
-      }
-      
-      setSurgeries(allSurgeries);
-    } catch (error) {
-      console.error('获取手术数据失败:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const timeToHour = (timeStr) => {
-    if (!timeStr) return 0;
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    return hours + minutes / 60;
-  };
-
-  const hourToTime = (hour) => {
-    const h = Math.floor(hour);
-    const m = Math.round((hour - h) * 60);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  };
-
-  const getDateRange = () => {
-    const dates = [];
-    const startDate = new Date(surgeryDate);
-    for (let i = 0; i < DAYS_TO_SHOW; i++) {
-      const date = new Date(startDate);
-      date.setDate(date.getDate() + i);
-      dates.push(date.toISOString().split('T')[0]);
-    }
-    return dates;
-  };
-
-  const getSurgeriesForDate = (date) => {
-    return surgeries.filter(s => s.surgery_date === date);
-  };
-
-  const checkConflict = (startHour, endHour, date) => {
-    const daySurgeries = getSurgeriesForDate(date);
-    return daySurgeries.some(surgery => {
-      const sStart = timeToHour(surgery.start_time);
-      const sEnd = timeToHour(surgery.end_time);
-      // 检查是否有重叠
-      return (startHour < sEnd && endHour > sStart);
+  const surgeriesByDate = useMemo(() => {
+    const map = new Map();
+    surgeries.forEach(surgery => {
+      const list = map.get(surgery.surgery_date);
+      if (list) list.push(surgery);
+      else map.set(surgery.surgery_date, [surgery]);
     });
-  };
+    return map;
+  }, [surgeries]);
 
-  const drawCanvas = () => {
+  datesRef.current = dates;
+  byDateRef.current = surgeriesByDate;
+  surgeryDateRef.current = surgeryDate;
+
+  const paint = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const visibleDates = datesRef.current;
+    if (!canvas || visibleDates.length === 0) return;
 
     const ctx = canvas.getContext('2d');
-    const dates = getDateRange();
-    const width = dates.length * DATE_WIDTH;
+    const width = visibleDates.length * DATE_WIDTH;
     const height = HOURS * HOUR_HEIGHT;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
 
-    canvas.width = width;
-    canvas.height = height;
-
-    // 清空画布
     ctx.clearRect(0, 0, width, height);
-
-    // 绘制网格
     ctx.strokeStyle = '#e0e0e0';
     ctx.lineWidth = 1;
 
-    // 绘制小时线
-    for (let h = 0; h <= HOURS; h++) {
-      const y = h * HOUR_HEIGHT;
+    for (let hour = 0; hour <= HOURS; hour++) {
+      const y = hour * HOUR_HEIGHT;
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(width, y);
       ctx.stroke();
     }
 
-    // 绘制日期线
-    for (let i = 0; i <= dates.length; i++) {
-      const x = i * DATE_WIDTH;
+    for (let index = 0; index <= visibleDates.length; index++) {
+      const x = index * DATE_WIDTH;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, height);
       ctx.stroke();
     }
 
-    // 绘制小时标签
     ctx.fillStyle = '#666';
     ctx.font = '12px Arial';
     ctx.textAlign = 'right';
-    for (let h = 0; h < HOURS; h++) {
-      const y = h * HOUR_HEIGHT + HOUR_HEIGHT / 2;
-      ctx.fillText(`${String(h).padStart(2, '0')}:00`, DATE_WIDTH - 10, y + 4);
+    for (let hour = 0; hour < HOURS; hour++) {
+      const y = hour * HOUR_HEIGHT + HOUR_HEIGHT / 2;
+      ctx.fillText(`${String(hour).padStart(2, '0')}:00`, DATE_WIDTH - 10, y + 4);
     }
 
-    // 绘制日期标签
     ctx.textAlign = 'center';
-    dates.forEach((date, index) => {
+    visibleDates.forEach((date, index) => {
       const x = index * DATE_WIDTH + DATE_WIDTH / 2;
-      const dateObj = new Date(date);
-      const isToday = date === surgeryDate;
-      
-      ctx.fillStyle = isToday ? '#007bff' : '#333';
-      ctx.font = isToday ? 'bold 14px Arial' : '14px Arial';
-      ctx.fillText(
-        `${dateObj.getMonth() + 1}/${dateObj.getDate()}`,
-        x,
-        20
-      );
+      const isSelected = date === surgeryDateRef.current;
+      ctx.fillStyle = isSelected ? '#007bff' : '#333';
+      ctx.font = isSelected ? 'bold 14px Arial' : '14px Arial';
+      ctx.fillText(formatMonthDay(date), x, 20);
     });
 
-    // 绘制已占用的时间段
-    dates.forEach((date, dateIndex) => {
-      const daySurgeries = getSurgeriesForDate(date);
+    visibleDates.forEach((date, dateIndex) => {
+      const daySurgeries = byDateRef.current.get(date) || [];
       daySurgeries.forEach(surgery => {
         const startHour = timeToHour(surgery.start_time);
         const endHour = timeToHour(surgery.end_time);
         const x = dateIndex * DATE_WIDTH + 5;
         const y = startHour * HOUR_HEIGHT;
-        const h = (endHour - startHour) * HOUR_HEIGHT;
-
-        // 检查是否是悬浮的手术
-        const isHovered = hoveredSurgery?.id === surgery.id;
+        const blockHeight = (endHour - startHour) * HOUR_HEIGHT;
+        const isHovered = hoveredIdRef.current === surgery.id;
 
         ctx.fillStyle = isHovered ? '#ff6b6b' : '#ffa8a8';
-        ctx.fillRect(x, y, DATE_WIDTH - 10, h);
-
-        // 绘制边框
+        ctx.fillRect(x, y, DATE_WIDTH - 10, blockHeight);
         ctx.strokeStyle = isHovered ? '#ff4757' : '#ff8787';
         ctx.lineWidth = isHovered ? 2 : 1;
-        ctx.strokeRect(x, y, DATE_WIDTH - 10, h);
+        ctx.strokeRect(x, y, DATE_WIDTH - 10, blockHeight);
 
-        // 绘制文字
         ctx.fillStyle = '#fff';
         ctx.font = '11px Arial';
         ctx.textAlign = 'left';
-        ctx.fillText(
-          `${surgery.patient_name}`,
-          x + 5,
-          y + 15
-        );
-        ctx.fillText(
-          `${surgery.start_time}-${surgery.end_time}`,
-          x + 5,
-          y + 28
-        );
+        ctx.fillText(surgery.patient_name, x + 5, y + 15);
+        ctx.fillText(`${surgery.start_time}-${surgery.end_time}`, x + 5, y + 28);
       });
     });
 
-    // 绘制选中的时间段（如果有）
-    if (selectedStart !== null && selectedEnd !== null) {
-      const dateIndex = dates.indexOf(surgeryDate);
+    const selected = selectionRef.current;
+    if (selected.start !== null && selected.end !== null) {
+      const dateIndex = visibleDates.indexOf(surgeryDateRef.current);
       if (dateIndex >= 0) {
         const x = dateIndex * DATE_WIDTH + 5;
-        const y = selectedStart * HOUR_HEIGHT;
-        const h = (selectedEnd - selectedStart) * HOUR_HEIGHT;
-
-        // 检查冲突
-        const hasConflict = checkConflict(selectedStart, selectedEnd, surgeryDate);
+        const y = selected.start * HOUR_HEIGHT;
+        const blockHeight = (selected.end - selected.start) * HOUR_HEIGHT;
+        const daySurgeries = byDateRef.current.get(surgeryDateRef.current) || [];
+        const hasConflict = daySurgeries.some(surgery => rangesOverlap(selected.start, selected.end, surgery));
 
         ctx.fillStyle = hasConflict ? 'rgba(255, 0, 0, 0.3)' : 'rgba(0, 123, 255, 0.3)';
-        ctx.fillRect(x, y, DATE_WIDTH - 10, h);
-
+        ctx.fillRect(x, y, DATE_WIDTH - 10, blockHeight);
         ctx.strokeStyle = hasConflict ? '#ff0000' : '#007bff';
         ctx.lineWidth = 2;
-        ctx.strokeRect(x, y, DATE_WIDTH - 10, h);
+        ctx.strokeRect(x, y, DATE_WIDTH - 10, blockHeight);
 
-        // 绘制时间标签
         ctx.fillStyle = hasConflict ? '#ff0000' : '#007bff';
         ctx.font = 'bold 12px Arial';
         ctx.textAlign = 'left';
-        ctx.fillText(
-          `${hourToTime(selectedStart)} - ${hourToTime(selectedEnd)}`,
-          x + 5,
-          y - 5
+        ctx.fillText(`${hourToTime(selected.start)} - ${hourToTime(selected.end)}`, x + 5, y - 5);
+        if (hasConflict) ctx.fillText('⚠️ 时间冲突', x + 5, y + blockHeight + 15);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!operatingRoom || !surgeryDate) return undefined;
+    let cancelled = false;
+
+    const load = async () => {
+      setLoading(true);
+      try {
+        const response = await surgeryAPI.getAll(
+          null,
+          null,
+          operatingRoom,
+          true,
+          surgeryDate,
+          addDays(surgeryDate, DAYS_TO_SHOW - 1)
         );
-
-        if (hasConflict) {
-          ctx.fillText('⚠️ 时间冲突', x + 5, y + h + 15);
-        }
+        if (cancelled) return;
+        setSurgeries(response.data.filter(surgery => (
+          surgery.id !== excludeSurgeryId && surgery.status !== 'cancelled'
+        )));
+      } catch (error) {
+        console.error('获取手术数据失败:', error);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    }
-  };
+    };
 
-  const getYFromEvent = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    return Math.max(0, Math.min(HOURS, y / HOUR_HEIGHT));
-  };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [operatingRoom, surgeryDate, excludeSurgeryId]);
 
-  const getDateFromEvent = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
+  useEffect(() => {
+    if (!startTime || !endTime) return;
+    const next = { start: timeToHour(startTime), end: timeToHour(endTime) };
+    selectionRef.current = next;
+    setSelection(next);
+    paint();
+  }, [startTime, endTime, paint]);
+
+  useEffect(() => {
+    paint();
+  }, [surgeries, hoveredSurgery, surgeryDate, paint]);
+
+  useEffect(() => () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+  }, []);
+
+  useLayoutEffect(() => {
+    const tooltip = tooltipRef.current;
+    if (!tooltip) return;
+    tooltip.style.left = `${pointerRef.current.x + 10}px`;
+    tooltip.style.top = `${pointerRef.current.y + 10}px`;
+  });
+
+  const pointerToSlot = (event) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = rect.width ? canvas.width / rect.width : 1;
+    const scaleY = rect.height ? canvas.height / rect.height : 1;
+    const x = (event.clientX - rect.left) * scaleX;
+    const y = (event.clientY - rect.top) * scaleY;
+    const hour = Math.max(0, Math.min(HOURS, y / HOUR_HEIGHT));
     const dateIndex = Math.floor(x / DATE_WIDTH);
-    const dates = getDateRange();
-    return dates[dateIndex] || surgeryDate;
+    const date = datesRef.current[dateIndex] || surgeryDateRef.current;
+    return { hour, date };
   };
 
-  const handleMouseDown = (e) => {
-    const hour = getYFromEvent(e);
-    const date = getDateFromEvent(e);
-    
-    if (date === surgeryDate) {
-      setIsDragging(true);
-      setDragStartY(hour);
-      setSelectedStart(hour);
-      setSelectedEnd(hour);
-    }
+  const surgeryAt = (date, hour) => {
+    const daySurgeries = byDateRef.current.get(date) || [];
+    return daySurgeries.find(surgery => {
+      const start = timeToHour(surgery.start_time);
+      const end = timeToHour(surgery.end_time);
+      return hour >= start && hour <= end;
+    }) || null;
   };
 
-  const handleMouseMove = (e) => {
-    const hour = getYFromEvent(e);
-    const date = getDateFromEvent(e);
-    
-    // 更新鼠标位置用于 tooltip 定位
-    setHoverPosition({ x: e.clientX, y: e.clientY });
+  const scheduleSelection = (next) => {
+    selectionRef.current = next;
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0;
+      paint();
+      setSelection(selectionRef.current);
+    });
+  };
 
-    // 检查鼠标是否在某个手术上
-    const dates = getDateRange();
-    const dateIndex = dates.indexOf(date);
-    if (dateIndex >= 0) {
-      const daySurgeries = getSurgeriesForDate(date);
-      let found = false;
-      
-      for (const surgery of daySurgeries) {
-        const sStart = timeToHour(surgery.start_time);
-        const sEnd = timeToHour(surgery.end_time);
-        if (hour >= sStart && hour <= sEnd) {
-          setHoveredSurgery(surgery);
-          found = true;
-          break;
-        }
-      }
-      
-      if (!found) {
-        setHoveredSurgery(null);
-      }
+  const handleMouseDown = (event) => {
+    const { hour, date } = pointerToSlot(event);
+    if (date !== surgeryDateRef.current) return;
+    dragOriginRef.current = hour;
+    const next = { start: hour, end: hour };
+    selectionRef.current = next;
+    setSelection(next);
+    paint();
+  };
+
+  const handleMouseMove = (event) => {
+    pointerRef.current = { x: event.clientX, y: event.clientY };
+    const tooltip = tooltipRef.current;
+    if (tooltip) {
+      tooltip.style.left = `${event.clientX + 10}px`;
+      tooltip.style.top = `${event.clientY + 10}px`;
     }
 
-    // 处理拖拽
-    if (isDragging && date === surgeryDate) {
-      if (hour >= dragStartY) {
-        setSelectedStart(dragStartY);
-        setSelectedEnd(hour);
-      } else {
-        setSelectedStart(hour);
-        setSelectedEnd(dragStartY);
-      }
+    const { hour, date } = pointerToSlot(event);
+    const surgery = surgeryAt(date, hour);
+    const nextId = surgery ? surgery.id : null;
+    if (nextId !== hoveredIdRef.current) {
+      hoveredIdRef.current = nextId;
+      setHoveredSurgery(surgery);
+    }
+
+    if (dragOriginRef.current !== null && date === surgeryDateRef.current) {
+      const origin = dragOriginRef.current;
+      scheduleSelection({
+        start: Math.min(origin, hour),
+        end: Math.max(origin, hour)
+      });
     }
   };
 
   const handleMouseUp = () => {
-    if (isDragging && selectedStart !== null && selectedEnd !== null) {
-      const startTimeStr = hourToTime(selectedStart);
-      const endTimeStr = hourToTime(selectedEnd);
-      
-      if (onTimeChange) {
-        onTimeChange(startTimeStr, endTimeStr);
-      }
-    }
-    setIsDragging(false);
-    setDragStartY(null);
+    if (dragOriginRef.current === null) return;
+    dragOriginRef.current = null;
+    const selected = selectionRef.current;
+    if (selected.start === null || selected.end === null || !onTimeChange) return;
+    const startText = hourToTime(selected.start);
+    const endText = hourToTime(selected.end);
+    if (startText < endText) onTimeChange(startText, endText);
   };
 
   const handleMouseLeave = () => {
+    hoveredIdRef.current = null;
     setHoveredSurgery(null);
-    if (!isDragging) {
-      setIsDragging(false);
-    }
   };
 
   if (!operatingRoom || !surgeryDate) {
@@ -350,6 +315,11 @@ const TimeSlotVisualizer = ({
       </div>
     );
   }
+
+  const daySurgeries = surgeriesByDate.get(surgeryDate) || [];
+  const hasConflict = selection.start !== null
+    && selection.end !== null
+    && daySurgeries.some(surgery => rangesOverlap(selection.start, selection.end, surgery));
 
   return (
     <div className="time-slot-visualizer">
@@ -370,14 +340,10 @@ const TimeSlotVisualizer = ({
       </div>
 
       {hoveredSurgery && (
-        <div 
+        <div
+          ref={tooltipRef}
           className="surgery-tooltip"
-          style={{
-            position: 'fixed',
-            left: `${hoverPosition.x + 10}px`,
-            top: `${hoverPosition.y + 10}px`,
-            zIndex: 10000
-          }}
+          style={{ position: 'fixed', zIndex: 10000 }}
         >
           <div className="tooltip-title">已占用时间段</div>
           <div><strong>患者:</strong> {hoveredSurgery.patient_name}</div>
@@ -388,12 +354,12 @@ const TimeSlotVisualizer = ({
         </div>
       )}
 
-      {selectedStart !== null && selectedEnd !== null && (
+      {selection.start !== null && selection.end !== null && (
         <div className="selected-time-info">
           <div>
-            <strong>选择的时间:</strong> {hourToTime(selectedStart)} - {hourToTime(selectedEnd)}
+            <strong>选择的时间:</strong> {hourToTime(selection.start)} - {hourToTime(selection.end)}
           </div>
-          {checkConflict(selectedStart, selectedEnd, surgeryDate) && (
+          {hasConflict && (
             <div className="conflict-warning">
               ⚠️ 该时间段与已有手术冲突，请调整时间
             </div>

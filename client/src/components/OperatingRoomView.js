@@ -25,13 +25,15 @@ const OperatingRoomView = ({ date, onClose }) => {
       const surgeriesResponse = await surgeryAPI.getAll(date, null, null, true);
       const allSurgeries = surgeriesResponse.data;
 
-      // 按手术室分组
       const grouped = {};
       allSurgeries.forEach(surgery => {
         if (!grouped[surgery.operating_room]) {
           grouped[surgery.operating_room] = [];
         }
         grouped[surgery.operating_room].push(surgery);
+      });
+      Object.values(grouped).forEach(list => {
+        list.sort((a, b) => a.start_time.localeCompare(b.start_time));
       });
       setRoomSurgeries(grouped);
 
@@ -86,14 +88,7 @@ const OperatingRoomView = ({ date, onClose }) => {
                         <div className="no-surgeries">暂无手术安排</div>
                       ) : (
                         <div className="surgeries-list">
-                          {surgeries
-                            .sort((a, b) => {
-                              if (a.surgery_date !== b.surgery_date) {
-                                return a.surgery_date.localeCompare(b.surgery_date);
-                              }
-                              return a.start_time.localeCompare(b.start_time);
-                            })
-                            .map(surgery => (
+                          {surgeries.map(surgery => (
                               <div key={surgery.id} className="surgery-item">
                                 <div className="surgery-date">{surgery.surgery_date}</div>
                                 <div className="surgery-time">

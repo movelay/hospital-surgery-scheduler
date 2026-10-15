@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../services/AuthContext';
 import { surgeryAPI } from '../services/api';
+import { localDateString } from '../utils/date';
 import SurgeryList from '../components/SurgeryList';
 import SurgeryForm from '../components/SurgeryForm';
 import UserManagement from '../components/UserManagement';
@@ -15,7 +16,9 @@ const AdminDashboard = () => {
   const [showUserManagement, setShowUserManagement] = useState(false);
   const [showDatabaseManagement, setShowDatabaseManagement] = useState(false);
   const [editingSurgery, setEditingSurgery] = useState(null);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(() => localDateString());
+  const [refreshing, setRefreshing] = useState(false);
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
     if (user?.role === 'admin') {
@@ -26,14 +29,17 @@ const AdminDashboard = () => {
 
   const fetchSurgeries = async () => {
     try {
-      setLoading(true);
+      if (hasLoadedRef.current) setRefreshing(true);
+      else setLoading(true);
       const response = await surgeryAPI.getAll(selectedDate);
       setSurgeries(response.data);
+      hasLoadedRef.current = true;
     } catch (error) {
       console.error('获取手术列表失败:', error);
       alert('获取手术列表失败');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -106,6 +112,7 @@ const AdminDashboard = () => {
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
             />
+            {refreshing && <span className="toolbar-status">更新中...</span>}
           </div>
           <button onClick={handleCreate} className="create-button">
             新增手术
