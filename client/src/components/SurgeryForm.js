@@ -1,13 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { surgeryAPI } from '../services/api';
-import { userAPI } from '../services/api';
-import { useAuth } from '../services/AuthContext';
-import TimeSlotVisualizer from './TimeSlotVisualizer';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
+import { surgeryAPI, userAPI } from '../services/api';
 import { localDateString } from '../utils/date';
 import '../styles/SurgeryForm.css';
 
+const TimeSlotVisualizer = lazy(() => import('./TimeSlotVisualizer'));
+
 const SurgeryForm = ({ surgery, onClose, onSuccess, isAdmin = false }) => {
-  const { user } = useAuth();
   const [formData, setFormData] = useState({
     doctor_id: '',
     patient_name: '',
@@ -25,46 +23,38 @@ const SurgeryForm = ({ surgery, onClose, onSuccess, isAdmin = false }) => {
   const [showVisualizer, setShowVisualizer] = useState(false);
 
   useEffect(() => {
-    // 加载医生列表
-    const loadDoctors = async () => {
-      try {
-        const response = await userAPI.getDoctors();
-        setDoctors(response.data);
-        // 如果不是编辑模式且不是管理员，默认选择当前登录用户
-        if (!surgery && !isAdmin && user) {
-          const currentDoctor = response.data.find(d => d.id === user.id);
-          if (currentDoctor) {
-            setFormData(prev => ({ ...prev, doctor_id: currentDoctor.id.toString() }));
-          }
-        }
-      } catch (error) {
-        console.error('加载医生列表失败:', error);
-      }
-    };
-    loadDoctors();
-
-    if (surgery) {
-      setFormData({
-        doctor_id: surgery.doctor_id ? surgery.doctor_id.toString() : '',
-        patient_name: surgery.patient_name || '',
-        surgery_type: surgery.surgery_type || '',
-        surgery_date: surgery.surgery_date || localDateString(),
-        start_time: surgery.start_time || '',
-        end_time: surgery.end_time || '',
-        operating_room: surgery.operating_room || '',
-        notes: surgery.notes || '',
-        status: surgery.status || 'scheduled'
+    if (!isAdmin) return undefined;
+    let cancelled = false;
+    userAPI.getDoctors()
+      .then((response) => {
+        if (!cancelled) setDoctors(response.data);
+      })
+      .catch((loadError) => {
+        console.error('加载医生列表失败:', loadError);
       });
-    }
-  }, [surgery, isAdmin, user]);
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!surgery) return;
+    setFormData({
+      doctor_id: surgery.doctor_id ? surgery.doctor_id.toString() : '',
+      patient_name: surgery.patient_name || '',
+      surgery_type: surgery.surgery_type || '',
+      surgery_date: surgery.surgery_date || localDateString(),
+      start_time: surgery.start_time || '',
+      end_time: surgery.end_time || '',
+      operating_room: surgery.operating_room || '',
+      notes: surgery.notes || '',
+      status: surgery.status || 'scheduled'
+    });
+  }, [surgery]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
-    // 当手术室或日期改变时，如果已显示可视化选择器，保持显示
-    if ((name === 'operating_room' || name === 'surgery_date') && value && showVisualizer) {
-      // 可视化选择器会自动更新
-    }
   };
 
   const handleTimeChange = (startTime, endTime) => {
@@ -198,14 +188,16 @@ const SurgeryForm = ({ surgery, onClose, onSuccess, isAdmin = false }) => {
           </div>
 
           {showVisualizer && formData.operating_room && formData.surgery_date && (
-            <TimeSlotVisualizer
-              operatingRoom={formData.operating_room}
-              surgeryDate={formData.surgery_date}
-              startTime={formData.start_time}
-              endTime={formData.end_time}
-              onTimeChange={handleTimeChange}
-              excludeSurgeryId={surgery?.id}
-            />
+            <Suspense fallback={<div className="loading-text">时间表加载中...</div>}>
+              <TimeSlotVisualizer
+                operatingRoom={formData.operating_room}
+                surgeryDate={formData.surgery_date}
+                startTime={formData.start_time}
+                endTime={formData.end_time}
+                onTimeChange={handleTimeChange}
+                excludeSurgeryId={surgery?.id}
+              />
+            </Suspense>
           )}
 
           <div className="form-row">

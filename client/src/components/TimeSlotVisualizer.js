@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
-import { surgeryAPI } from '../services/api';
+import { surgeryAPI, isCanceled } from '../services/api';
 import { addDays, formatMonthDay } from '../utils/date';
 import '../styles/TimeSlotVisualizer.css';
 
@@ -22,9 +22,92 @@ function hourToTime(hour) {
 }
 
 function rangesOverlap(startHour, endHour, surgery) {
-  const start = timeToHour(surgery.start_time);
-  const end = timeToHour(surgery.end_time);
-  return startHour < end && endHour > start;
+  return startHour < surgery.endHour && endHour > surgery.startHour;
+}
+
+function drawBoard(ctx, visibleDates, width, height, byDate, hoveredId, selectedDate) {
+  ctx.clearRect(0, 0, width, height);
+  ctx.strokeStyle = '#e0e0e0';
+  ctx.lineWidth = 1;
+
+  for (let hour = 0; hour <= HOURS; hour++) {
+    const y = hour * HOUR_HEIGHT;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  for (let index = 0; index <= visibleDates.length; index++) {
+    const x = index * DATE_WIDTH;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = '#666';
+  ctx.font = '12px Arial';
+  ctx.textAlign = 'right';
+  for (let hour = 0; hour < HOURS; hour++) {
+    const y = hour * HOUR_HEIGHT + HOUR_HEIGHT / 2;
+    ctx.fillText(`${String(hour).padStart(2, '0')}:00`, DATE_WIDTH - 10, y + 4);
+  }
+
+  ctx.textAlign = 'center';
+  visibleDates.forEach((date, index) => {
+    const x = index * DATE_WIDTH + DATE_WIDTH / 2;
+    const isSelected = date === selectedDate;
+    ctx.fillStyle = isSelected ? '#007bff' : '#333';
+    ctx.font = isSelected ? 'bold 14px Arial' : '14px Arial';
+    ctx.fillText(formatMonthDay(date), x, 20);
+  });
+
+  visibleDates.forEach((date, dateIndex) => {
+    const daySurgeries = byDate.get(date) || [];
+    daySurgeries.forEach(surgery => {
+      const x = dateIndex * DATE_WIDTH + 5;
+      const y = surgery.startHour * HOUR_HEIGHT;
+      const blockHeight = (surgery.endHour - surgery.startHour) * HOUR_HEIGHT;
+      const isHovered = hoveredId === surgery.id;
+
+      ctx.fillStyle = isHovered ? '#ff6b6b' : '#ffa8a8';
+      ctx.fillRect(x, y, DATE_WIDTH - 10, blockHeight);
+      ctx.strokeStyle = isHovered ? '#ff4757' : '#ff8787';
+      ctx.lineWidth = isHovered ? 2 : 1;
+      ctx.strokeRect(x, y, DATE_WIDTH - 10, blockHeight);
+
+      ctx.fillStyle = '#fff';
+      ctx.font = '11px Arial';
+      ctx.textAlign = 'left';
+      ctx.fillText(surgery.patient_name, x + 5, y + 15);
+      ctx.fillText(`${surgery.start_time}-${surgery.end_time}`, x + 5, y + 28);
+    });
+  });
+}
+
+function drawSelection(ctx, visibleDates, byDate, selectedDate, selected) {
+  if (selected.start === null || selected.end === null) return;
+  const dateIndex = visibleDates.indexOf(selectedDate);
+  if (dateIndex < 0) return;
+
+  const x = dateIndex * DATE_WIDTH + 5;
+  const y = selected.start * HOUR_HEIGHT;
+  const blockHeight = (selected.end - selected.start) * HOUR_HEIGHT;
+  const daySurgeries = byDate.get(selectedDate) || [];
+  const hasConflict = daySurgeries.some(surgery => rangesOverlap(selected.start, selected.end, surgery));
+
+  ctx.fillStyle = hasConflict ? 'rgba(255, 0, 0, 0.3)' : 'rgba(0, 123, 255, 0.3)';
+  ctx.fillRect(x, y, DATE_WIDTH - 10, blockHeight);
+  ctx.strokeStyle = hasConflict ? '#ff0000' : '#007bff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, DATE_WIDTH - 10, blockHeight);
+
+  ctx.fillStyle = hasConflict ? '#ff0000' : '#007bff';
+  ctx.font = 'bold 12px Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText(`${hourToTime(selected.start)} - ${hourToTime(selected.end)}`, x + 5, y - 5);
+  if (hasConflict) ctx.fillText('⚠️ 时间冲突', x + 5, y + blockHeight + 15);
 }
 
 const TimeSlotVisualizer = ({
@@ -59,12 +142,25 @@ const TimeSlotVisualizer = ({
   const surgeriesByDate = useMemo(() => {
     const map = new Map();
     surgeries.forEach(surgery => {
+      const enriched = {
+        ...surgery,
+        startHour: timeToHour(surgery.start_time),
+        endHour: timeToHour(surgery.end_time)
+      };
       const list = map.get(surgery.surgery_date);
-      if (list) list.push(surgery);
-      else map.set(surgery.surgery_date, [surgery]);
+      if (list) list.push(enriched);
+      else map.set(surgery.surgery_date, [enriched]);
     });
     return map;
   }, [surgeries]);
+
+  const dataVersionRef = useRef(0);
+  const dataSnapshotRef = useRef({ surgeries, surgeryDate });
+  if (dataSnapshotRef.current.surgeries !== surgeries || dataSnapshotRef.current.surgeryDate !== surgeryDate) {
+    dataSnapshotRef.current = { surgeries, surgeryDate };
+    dataVersionRef.current += 1;
+  }
+  const staticLayerRef = useRef({ canvas: null, key: '' });
 
   datesRef.current = dates;
   byDateRef.current = surgeriesByDate;
@@ -75,7 +171,6 @@ const TimeSlotVisualizer = ({
     const visibleDates = datesRef.current;
     if (!canvas || visibleDates.length === 0) return;
 
-    const ctx = canvas.getContext('2d');
     const width = visibleDates.length * DATE_WIDTH;
     const height = HOURS * HOUR_HEIGHT;
     if (canvas.width !== width || canvas.height !== height) {
@@ -83,95 +178,39 @@ const TimeSlotVisualizer = ({
       canvas.height = height;
     }
 
-    ctx.clearRect(0, 0, width, height);
-    ctx.strokeStyle = '#e0e0e0';
-    ctx.lineWidth = 1;
-
-    for (let hour = 0; hour <= HOURS; hour++) {
-      const y = hour * HOUR_HEIGHT;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(width, y);
-      ctx.stroke();
+    const layerKey = `${width}x${height}|${dataVersionRef.current}|${hoveredIdRef.current}|${visibleDates.join(',')}`;
+    let layer = staticLayerRef.current.canvas;
+    if (!layer) {
+      layer = document.createElement('canvas');
+      staticLayerRef.current.canvas = layer;
     }
-
-    for (let index = 0; index <= visibleDates.length; index++) {
-      const x = index * DATE_WIDTH;
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, height);
-      ctx.stroke();
-    }
-
-    ctx.fillStyle = '#666';
-    ctx.font = '12px Arial';
-    ctx.textAlign = 'right';
-    for (let hour = 0; hour < HOURS; hour++) {
-      const y = hour * HOUR_HEIGHT + HOUR_HEIGHT / 2;
-      ctx.fillText(`${String(hour).padStart(2, '0')}:00`, DATE_WIDTH - 10, y + 4);
-    }
-
-    ctx.textAlign = 'center';
-    visibleDates.forEach((date, index) => {
-      const x = index * DATE_WIDTH + DATE_WIDTH / 2;
-      const isSelected = date === surgeryDateRef.current;
-      ctx.fillStyle = isSelected ? '#007bff' : '#333';
-      ctx.font = isSelected ? 'bold 14px Arial' : '14px Arial';
-      ctx.fillText(formatMonthDay(date), x, 20);
-    });
-
-    visibleDates.forEach((date, dateIndex) => {
-      const daySurgeries = byDateRef.current.get(date) || [];
-      daySurgeries.forEach(surgery => {
-        const startHour = timeToHour(surgery.start_time);
-        const endHour = timeToHour(surgery.end_time);
-        const x = dateIndex * DATE_WIDTH + 5;
-        const y = startHour * HOUR_HEIGHT;
-        const blockHeight = (endHour - startHour) * HOUR_HEIGHT;
-        const isHovered = hoveredIdRef.current === surgery.id;
-
-        ctx.fillStyle = isHovered ? '#ff6b6b' : '#ffa8a8';
-        ctx.fillRect(x, y, DATE_WIDTH - 10, blockHeight);
-        ctx.strokeStyle = isHovered ? '#ff4757' : '#ff8787';
-        ctx.lineWidth = isHovered ? 2 : 1;
-        ctx.strokeRect(x, y, DATE_WIDTH - 10, blockHeight);
-
-        ctx.fillStyle = '#fff';
-        ctx.font = '11px Arial';
-        ctx.textAlign = 'left';
-        ctx.fillText(surgery.patient_name, x + 5, y + 15);
-        ctx.fillText(`${surgery.start_time}-${surgery.end_time}`, x + 5, y + 28);
-      });
-    });
-
-    const selected = selectionRef.current;
-    if (selected.start !== null && selected.end !== null) {
-      const dateIndex = visibleDates.indexOf(surgeryDateRef.current);
-      if (dateIndex >= 0) {
-        const x = dateIndex * DATE_WIDTH + 5;
-        const y = selected.start * HOUR_HEIGHT;
-        const blockHeight = (selected.end - selected.start) * HOUR_HEIGHT;
-        const daySurgeries = byDateRef.current.get(surgeryDateRef.current) || [];
-        const hasConflict = daySurgeries.some(surgery => rangesOverlap(selected.start, selected.end, surgery));
-
-        ctx.fillStyle = hasConflict ? 'rgba(255, 0, 0, 0.3)' : 'rgba(0, 123, 255, 0.3)';
-        ctx.fillRect(x, y, DATE_WIDTH - 10, blockHeight);
-        ctx.strokeStyle = hasConflict ? '#ff0000' : '#007bff';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x, y, DATE_WIDTH - 10, blockHeight);
-
-        ctx.fillStyle = hasConflict ? '#ff0000' : '#007bff';
-        ctx.font = 'bold 12px Arial';
-        ctx.textAlign = 'left';
-        ctx.fillText(`${hourToTime(selected.start)} - ${hourToTime(selected.end)}`, x + 5, y - 5);
-        if (hasConflict) ctx.fillText('⚠️ 时间冲突', x + 5, y + blockHeight + 15);
+    if (staticLayerRef.current.key !== layerKey) {
+      if (layer.width !== width || layer.height !== height) {
+        layer.width = width;
+        layer.height = height;
       }
+      drawBoard(
+        layer.getContext('2d'),
+        visibleDates,
+        width,
+        height,
+        byDateRef.current,
+        hoveredIdRef.current,
+        surgeryDateRef.current
+      );
+      staticLayerRef.current.key = layerKey;
     }
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(layer, 0, 0);
+    drawSelection(ctx, visibleDates, byDateRef.current, surgeryDateRef.current, selectionRef.current);
   }, []);
 
   useEffect(() => {
     if (!operatingRoom || !surgeryDate) return undefined;
-    let cancelled = false;
+    const controller = new AbortController();
+    let active = true;
 
     const load = async () => {
       setLoading(true);
@@ -182,22 +221,25 @@ const TimeSlotVisualizer = ({
           operatingRoom,
           true,
           surgeryDate,
-          addDays(surgeryDate, DAYS_TO_SHOW - 1)
+          addDays(surgeryDate, DAYS_TO_SHOW - 1),
+          controller.signal
         );
-        if (cancelled) return;
+        if (!active) return;
         setSurgeries(response.data.filter(surgery => (
           surgery.id !== excludeSurgeryId && surgery.status !== 'cancelled'
         )));
       } catch (error) {
+        if (!active || isCanceled(error)) return;
         console.error('获取手术数据失败:', error);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (active) setLoading(false);
       }
     };
 
     load();
     return () => {
-      cancelled = true;
+      active = false;
+      controller.abort();
     };
   }, [operatingRoom, surgeryDate, excludeSurgeryId]);
 
@@ -239,11 +281,7 @@ const TimeSlotVisualizer = ({
 
   const surgeryAt = (date, hour) => {
     const daySurgeries = byDateRef.current.get(date) || [];
-    return daySurgeries.find(surgery => {
-      const start = timeToHour(surgery.start_time);
-      const end = timeToHour(surgery.end_time);
-      return hour >= start && hour <= end;
-    }) || null;
+    return daySurgeries.find(surgery => hour >= surgery.startHour && hour <= surgery.endHour) || null;
   };
 
   const scheduleSelection = (next) => {

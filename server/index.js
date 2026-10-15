@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const bodyParser = require('body-parser');
 const path = require('path');
 
@@ -23,6 +24,7 @@ const jsonParser = bodyParser.json({ limit: '1mb' });
 const urlencodedParser = bodyParser.urlencoded({ extended: true, limit: '1mb' });
 
 // 中间件。恢复备份可能携带完整数据库，单独放宽限制。
+app.use(compression());
 app.use(cors());
 app.use((req, res, next) => {
   if (req.method === 'POST' && req.path === '/api/database/restore') {

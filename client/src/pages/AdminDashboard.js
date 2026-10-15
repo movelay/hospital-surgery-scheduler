@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
 import { useAuth } from '../services/AuthContext';
-import { surgeryAPI } from '../services/api';
+import { surgeryAPI, isCanceled } from '../services/api';
 import { localDateString } from '../utils/date';
 import SurgeryList from '../components/SurgeryList';
-import SurgeryForm from '../components/SurgeryForm';
-import UserManagement from '../components/UserManagement';
-import DatabaseManagement from '../components/DatabaseManagement';
 import '../styles/Dashboard.css';
+
+const SurgeryForm = lazy(() => import('../components/SurgeryForm'));
+const UserManagement = lazy(() => import('../components/UserManagement'));
+const DatabaseManagement = lazy(() => import('../components/DatabaseManagement'));
 
 const AdminDashboard = () => {
   const { user, logout } = useAuth();
@@ -18,55 +19,66 @@ const AdminDashboard = () => {
   const [editingSurgery, setEditingSurgery] = useState(null);
   const [selectedDate, setSelectedDate] = useState(() => localDateString());
   const [refreshing, setRefreshing] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const hasLoadedRef = useRef(false);
+  const refresh = useCallback(() => setReloadKey((key) => key + 1), []);
 
   useEffect(() => {
-    if (user?.role === 'admin') {
-      fetchSurgeries();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate, user]);
+    if (user?.role !== 'admin') return undefined;
+    const controller = new AbortController();
+    let active = true;
 
-  const fetchSurgeries = async () => {
-    try {
-      if (hasLoadedRef.current) setRefreshing(true);
-      else setLoading(true);
-      const response = await surgeryAPI.getAll(selectedDate);
-      setSurgeries(response.data);
-      hasLoadedRef.current = true;
-    } catch (error) {
-      console.error('获取手术列表失败:', error);
-      alert('获取手术列表失败');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+    const load = async () => {
+      try {
+        if (hasLoadedRef.current) setRefreshing(true);
+        else setLoading(true);
+        const response = await surgeryAPI.getAll(selectedDate, null, null, false, null, null, controller.signal);
+        if (!active) return;
+        setSurgeries(response.data);
+        hasLoadedRef.current = true;
+      } catch (error) {
+        if (!active || isCanceled(error)) return;
+        console.error('获取手术列表失败:', error);
+        alert('获取手术列表失败');
+      } finally {
+        if (active) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    };
 
-  const handleCreate = () => {
+    load();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [selectedDate, user, reloadKey]);
+
+  const handleCreate = useCallback(() => {
     setEditingSurgery(null);
     setShowForm(true);
-  };
+  }, []);
 
-  const handleEdit = (surgery) => {
+  const handleEdit = useCallback((surgery) => {
     setEditingSurgery(surgery);
     setShowForm(true);
-  };
+  }, []);
 
-  const handleDelete = async (id) => {
+  const handleDelete = useCallback(async (id) => {
     if (!window.confirm('确定要删除这台手术吗？')) {
       return;
     }
 
     try {
       await surgeryAPI.delete(id);
-      fetchSurgeries();
+      refresh();
       alert('删除成功');
     } catch (error) {
       console.error('删除失败:', error);
       alert(error.response?.data?.error || '删除失败');
     }
-  };
+  }, [refresh]);
 
   const handleFormClose = () => {
     setShowForm(false);
@@ -76,7 +88,7 @@ const AdminDashboard = () => {
   const handleFormSuccess = () => {
     setShowForm(false);
     setEditingSurgery(null);
-    fetchSurgeries();
+    refresh();
   };
 
   return (
@@ -132,24 +144,30 @@ const AdminDashboard = () => {
       </div>
 
       {showForm && (
-        <SurgeryForm
-          surgery={editingSurgery}
-          onClose={handleFormClose}
-          onSuccess={handleFormSuccess}
-          isAdmin={true}
-        />
+        <Suspense fallback={<div className="loading">加载中...</div>}>
+          <SurgeryForm
+            surgery={editingSurgery}
+            onClose={handleFormClose}
+            onSuccess={handleFormSuccess}
+            isAdmin={true}
+          />
+        </Suspense>
       )}
 
       {showUserManagement && (
-        <UserManagement
-          onClose={() => setShowUserManagement(false)}
-        />
+        <Suspense fallback={<div className="loading">加载中...</div>}>
+          <UserManagement
+            onClose={() => setShowUserManagement(false)}
+          />
+        </Suspense>
       )}
 
       {showDatabaseManagement && (
-        <DatabaseManagement
-          onClose={() => setShowDatabaseManagement(false)}
-        />
+        <Suspense fallback={<div className="loading">加载中...</div>}>
+          <DatabaseManagement
+            onClose={() => setShowDatabaseManagement(false)}
+          />
+        </Suspense>
       )}
     </div>
   );

@@ -72,48 +72,65 @@ function assertNoConflict(db, slot) {
   }
 }
 
-router.get('/', (req, res) => {
+function listSurgeries(db, req) {
   const { date, date_from, date_to, doctor_id, operating_room } = req.query;
-  const db = getDatabase();
   const where = [];
   const params = [];
 
-  try {
-    if (date) {
-      where.push('s.surgery_date = ?');
-      params.push(requireDate(date, '日期'));
-    } else {
-      const from = optionalDate(date_from, '开始日期');
-      const to = optionalDate(date_to, '结束日期');
-      if (from) {
-        where.push('s.surgery_date >= ?');
-        params.push(from);
-      }
-      if (to) {
-        where.push('s.surgery_date <= ?');
-        params.push(to);
-      }
+  if (date) {
+    where.push('s.surgery_date = ?');
+    params.push(requireDate(date, '日期'));
+  } else {
+    const from = optionalDate(date_from, '开始日期');
+    const to = optionalDate(date_to, '结束日期');
+    if (from) {
+      where.push('s.surgery_date >= ?');
+      params.push(from);
     }
+    if (to) {
+      where.push('s.surgery_date <= ?');
+      params.push(to);
+    }
+  }
 
-    if (req.user.role === 'doctor') {
-      if (req.query.view_all !== 'true') {
-        where.push('s.doctor_id = ?');
-        params.push(req.user.id);
-      }
-    } else if (req.user.role === 'admin' && doctor_id) {
+  if (req.user.role === 'doctor') {
+    if (req.query.view_all !== 'true') {
       where.push('s.doctor_id = ?');
-      params.push(doctor_id);
+      params.push(req.user.id);
     }
+  } else if (req.user.role === 'admin' && doctor_id) {
+    where.push('s.doctor_id = ?');
+    params.push(doctor_id);
+  }
 
-    if (typeof operating_room === 'string' && operating_room.trim() !== '') {
-      where.push('s.operating_room = ?');
-      params.push(operating_room.trim());
-    }
+  if (typeof operating_room === 'string' && operating_room.trim() !== '') {
+    where.push('s.operating_room = ?');
+    params.push(operating_room.trim());
+  }
 
-    const sql = `${SURGERY_FROM}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY s.surgery_date, s.start_time`;
-    res.json(statement(db, sql).all(...params));
+  const sql = `${SURGERY_FROM}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY s.surgery_date, s.start_time`;
+  return statement(db, sql).all(...params);
+}
+
+router.get('/', (req, res) => {
+  try {
+    res.json(listSurgeries(getDatabase(), req));
   } catch (err) {
     return sendRouteError(res, err, '查询手术失败');
+  }
+});
+
+router.get('/day-board', (req, res) => {
+  const db = getDatabase();
+  try {
+    const surgeries = listSurgeries(db, req);
+    const rooms = statement(
+      db,
+      'SELECT DISTINCT operating_room FROM surgeries ORDER BY operating_room'
+    ).all().map(room => room.operating_room);
+    res.json({ surgeries, rooms });
+  } catch (err) {
+    return sendRouteError(res, err, '查询手术室视图失败');
   }
 });
 

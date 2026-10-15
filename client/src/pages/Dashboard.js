@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, Suspense, lazy } from 'react';
 import { useAuth } from '../services/AuthContext';
-import { surgeryAPI } from '../services/api';
+import { surgeryAPI, isCanceled } from '../services/api';
 import SurgeryList from '../components/SurgeryList';
-import SurgeryForm from '../components/SurgeryForm';
-import OperatingRoomView from '../components/OperatingRoomView';
 import { localDateString } from '../utils/date';
 import '../styles/Dashboard.css';
+
+const SurgeryForm = lazy(() => import('../components/SurgeryForm'));
+const OperatingRoomView = lazy(() => import('../components/OperatingRoomView'));
 
 const Dashboard = () => {
   const { user, logout } = useAuth();
@@ -17,29 +18,42 @@ const Dashboard = () => {
   const [selectedDate, setSelectedDate] = useState(() => localDateString());
   const [refreshing, setRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState('my'); // 'my', 'all', 'by-doctor', 'by-room'
+  const [reloadKey, setReloadKey] = useState(0);
   const hasLoadedRef = useRef(false);
+  const viewAll = viewMode !== 'my';
+
+  const refresh = useCallback(() => setReloadKey((key) => key + 1), []);
 
   useEffect(() => {
-    fetchSurgeries();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate, viewMode]);
+    const controller = new AbortController();
+    let active = true;
 
-  const fetchSurgeries = async () => {
-    try {
-      if (hasLoadedRef.current) setRefreshing(true);
-      else setLoading(true);
-      const viewAll = viewMode !== 'my';
-      const response = await surgeryAPI.getAll(selectedDate, null, null, viewAll);
-      setSurgeries(response.data);
-      hasLoadedRef.current = true;
-    } catch (error) {
-      console.error('获取手术列表失败:', error);
-      alert('获取手术列表失败');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+    const load = async () => {
+      try {
+        if (hasLoadedRef.current) setRefreshing(true);
+        else setLoading(true);
+        const response = await surgeryAPI.getAll(selectedDate, null, null, viewAll, null, null, controller.signal);
+        if (!active) return;
+        setSurgeries(response.data);
+        hasLoadedRef.current = true;
+      } catch (error) {
+        if (!active || isCanceled(error)) return;
+        console.error('获取手术列表失败:', error);
+        alert('获取手术列表失败');
+      } finally {
+        if (active) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    };
+
+    load();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [selectedDate, viewAll, reloadKey]);
 
   const groupedSurgeries = useMemo(() => {
     if (viewMode !== 'by-doctor' && viewMode !== 'by-room') return null;
@@ -54,30 +68,30 @@ const Dashboard = () => {
     return grouped;
   }, [surgeries, viewMode]);
 
-  const handleCreate = () => {
+  const handleCreate = useCallback(() => {
     setEditingSurgery(null);
     setShowForm(true);
-  };
+  }, []);
 
-  const handleEdit = (surgery) => {
+  const handleEdit = useCallback((surgery) => {
     setEditingSurgery(surgery);
     setShowForm(true);
-  };
+  }, []);
 
-  const handleDelete = async (id) => {
+  const handleDelete = useCallback(async (id) => {
     if (!window.confirm('确定要删除这台手术吗？')) {
       return;
     }
 
     try {
       await surgeryAPI.delete(id);
-      fetchSurgeries();
+      refresh();
       alert('删除成功');
     } catch (error) {
       console.error('删除失败:', error);
       alert(error.response?.data?.error || '删除失败');
     }
-  };
+  }, [refresh]);
 
   const handleFormClose = () => {
     setShowForm(false);
@@ -87,7 +101,7 @@ const Dashboard = () => {
   const handleFormSuccess = () => {
     setShowForm(false);
     setEditingSurgery(null);
-    fetchSurgeries();
+    refresh();
   };
 
   return (
@@ -157,18 +171,22 @@ const Dashboard = () => {
       </div>
 
       {showRoomView && (
-        <OperatingRoomView
-          date={selectedDate}
-          onClose={() => setShowRoomView(false)}
-        />
+        <Suspense fallback={<div className="loading">加载中...</div>}>
+          <OperatingRoomView
+            date={selectedDate}
+            onClose={() => setShowRoomView(false)}
+          />
+        </Suspense>
       )}
 
       {showForm && (
-        <SurgeryForm
-          surgery={editingSurgery}
-          onClose={handleFormClose}
-          onSuccess={handleFormSuccess}
-        />
+        <Suspense fallback={<div className="loading">加载中...</div>}>
+          <SurgeryForm
+            surgery={editingSurgery}
+            onClose={handleFormClose}
+            onSuccess={handleFormSuccess}
+          />
+        </Suspense>
       )}
     </div>
   );

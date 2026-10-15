@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { surgeryAPI } from '../services/api';
+import React, { useState, useEffect, useRef } from 'react';
+import { surgeryAPI, isCanceled } from '../services/api';
 import '../styles/OperatingRoomView.css';
 
 const OperatingRoomView = ({ date, onClose }) => {
@@ -7,46 +7,49 @@ const OperatingRoomView = ({ date, onClose }) => {
   const [roomSurgeries, setRoomSurgeries] = useState({});
   const [loading, setLoading] = useState(true);
   const [selectedRoom, setSelectedRoom] = useState(null);
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
-    fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date]);
+    const controller = new AbortController();
+    let active = true;
 
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      // 获取所有手术室
-      const roomsResponse = await surgeryAPI.getOperatingRooms();
-      const allRooms = roomsResponse.data;
-      setRooms(allRooms);
+    const load = async () => {
+      try {
+        if (!hasLoadedRef.current) setLoading(true);
+        const response = await surgeryAPI.getDayBoard(date, controller.signal);
+        if (!active) return;
+        const allRooms = response.data.rooms || [];
+        const allSurgeries = response.data.surgeries || [];
+        setRooms(allRooms);
 
-      // 获取所有手术（不筛选日期，显示所有）
-      const surgeriesResponse = await surgeryAPI.getAll(date, null, null, true);
-      const allSurgeries = surgeriesResponse.data;
-
-      const grouped = {};
-      allSurgeries.forEach(surgery => {
-        if (!grouped[surgery.operating_room]) {
-          grouped[surgery.operating_room] = [];
-        }
-        grouped[surgery.operating_room].push(surgery);
-      });
-      Object.values(grouped).forEach(list => {
-        list.sort((a, b) => a.start_time.localeCompare(b.start_time));
-      });
-      setRoomSurgeries(grouped);
-
-      if (allRooms.length > 0 && !selectedRoom) {
-        setSelectedRoom(allRooms[0]);
+        const grouped = {};
+        allSurgeries.forEach(surgery => {
+          if (!grouped[surgery.operating_room]) {
+            grouped[surgery.operating_room] = [];
+          }
+          grouped[surgery.operating_room].push(surgery);
+        });
+        Object.values(grouped).forEach(list => {
+          list.sort((a, b) => a.start_time.localeCompare(b.start_time));
+        });
+        setRoomSurgeries(grouped);
+        setSelectedRoom(current => current || allRooms[0] || null);
+        hasLoadedRef.current = true;
+      } catch (error) {
+        if (!active || isCanceled(error)) return;
+        console.error('获取手术室数据失败:', error);
+        alert('获取手术室数据失败');
+      } finally {
+        if (active) setLoading(false);
       }
-    } catch (error) {
-      console.error('获取手术室数据失败:', error);
-      alert('获取手术室数据失败');
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
+
+    load();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [date]);
 
   const formatTime = (time) => {
     return time || '';
